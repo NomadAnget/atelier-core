@@ -1,3 +1,6 @@
-"""GlobalContentProvider - 全自动视频本地化平台"""
+"""src —— 消息总线枢纽(影子项目)。
 
-__version__ = "2.0.0"
+结构:core/ 是内核(保留名);其余每个子目录 = 一个域 = topic 首段,
+域内 header.py 是该域唯一的收发窗口声明。组装入口:main.py。
+规则总览见 README.md。
+"""
