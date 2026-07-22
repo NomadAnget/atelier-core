@@ -93,11 +93,13 @@ def _put(q: asyncio.Queue, record: dict) -> None:
 
 
 def _fanout(level: str, layer: str, component: str, message: str,
-           phase: str = "") -> None:
+           phase: str = "", extra: dict | None = None) -> None:
     if not _subscribers:
         return
     record = {"ts": time.time(), "level": level, "layer": layer,
               "component": component, "message": message, "phase": phase}
+    if extra:
+        record.update(extra)
     for q, loop in list(_subscribers.items()):
         try:
             running = asyncio.get_running_loop()
@@ -113,6 +115,23 @@ def _fanout(level: str, layer: str, component: str, message: str,
 
 
 # ── 记录 API(与旧 logger 同形)───────────────────────────────────────────────
+
+def progress(msg: str, *, layer: str = "", component: str = "",
+             key: str = "", frac: float | None = None, done: bool = False) -> None:
+    """临时进度行:**只进程内扇出(SSE 实时),不落 hub_logs、不进控制台**。
+
+    带稳定 ``key`` → 前端按 key **原地更新同一行**(``done=True`` 清除该行);
+    ``frac`` ∈[0,1] 供渲染进度条。用于下载等长任务的 live 进度——黑匣子(hub_logs)
+    只留 start/finish 两行,不被高频进度污染;无 SSE 订阅者时零开销直接返回。"""
+    if not _subscribers:
+        return
+    extra: dict[str, Any] = {"ephemeral": True, "key": key}
+    if frac is not None:
+        extra["frac"] = frac
+    if done:
+        extra["done"] = True
+    _fanout("INFO", layer, component, msg, extra=extra)
+
 
 def _log(level: int, msg: str, *args: Any, layer: str = "", component: str = "",
          exc_info: Any = None, console_only: bool = False, phase: str = "") -> None:
