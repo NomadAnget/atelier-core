@@ -93,11 +93,11 @@ def _put(q: asyncio.Queue, record: dict) -> None:
 
 
 def _fanout(level: str, layer: str, component: str, message: str,
-           phase: str = "", extra: dict | None = None) -> None:
+           phase: str = "", extra: dict | None = None, ts: float | None = None) -> None:
     if not _subscribers:
         return
-    record = {"ts": time.time(), "level": level, "layer": layer,
-              "component": component, "message": message, "phase": phase}
+    record = {"ts": ts if ts is not None else time.time(), "level": level,
+              "layer": layer, "component": component, "message": message, "phase": phase}
     if extra:
         record.update(extra)
     for q, loop in list(_subscribers.items()):
@@ -173,3 +173,49 @@ def error(msg: str, *args: Any, **kw: Any) -> None:
 def exception(msg: str, *args: Any, **kw: Any) -> None:
     kw.setdefault("exc_info", True)
     _log(logging.ERROR, msg, *args, **kw)
+
+
+# ── 结构化日志中继(远程进程域 → 主进程,字段保真)────────────────────────────────
+
+def reinject(record: dict) -> None:
+    """把来自远程进程(如 task 子进程域)的结构化日志 record replay 进本进程 logger。
+
+    字段保真——照常进 控制台/hub_logs/订阅流(SSE);``ephemeral`` 记录只走扇出(同
+    ``progress`` 语义:不落库、不进控制台)。用于"结构化日志中继":远程进程
+    ``subscribe()`` 自己的记录 → 过网关转发 → 主进程 ``reinject``。比 supervisor 的
+    stdout 文本泵强:保留 ``layer``/``component``/``phase`` 起止配对 + 临时进度
+    ``key``/``frac``/``done``,而非压平成 SUBPROC 文本。``record`` 即 ``subscribe`` 队列元素。
+    """
+    level = str(record.get("level") or "INFO")
+    layer = record.get("layer") or ""
+    component = record.get("component") or ""
+    message = record.get("message") or ""
+    phase = record.get("phase") or ""
+    if record.get("ephemeral"):
+        extra: dict[str, Any] = {"ephemeral": True, "key": record.get("key", "")}
+        if record.get("frac") is not None:
+            extra["frac"] = record["frac"]
+        if record.get("done"):
+            extra["done"] = True
+        _fanout(level, layer, component, message, phase, extra=extra, ts=record.get("ts"))
+    else:
+        levelno = getattr(logging, level.upper(), logging.INFO)
+        _log(levelno, "%s", message, layer=layer, component=component, phase=phase)
+
+
+async def relay(send: Any, *, stop: "asyncio.Event | None" = None) -> None:
+    """远程进程域侧:订阅本进程全量结构化日志 → 逐条经 ``send`` 转发给主进程(主进程 ``reinject``)。
+
+    ``send``:``async def send(record: dict)`` 转发回调(task 子进程域接网关 ``publish``);
+    ``stop``:可选 ``asyncio.Event``,置位即停并退订。与 ``reinject`` 成完整中继两端。
+    """
+    q = subscribe()
+    try:
+        while stop is None or not stop.is_set():
+            record = await q.get()
+            try:
+                await send(record)
+            except Exception:  # noqa: BLE001
+                pass           # 转发失败不反噬日志(黑匣子本分:自己不能拖垮被观察者)
+    finally:
+        unsubscribe(q)

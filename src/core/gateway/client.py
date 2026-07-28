@@ -19,6 +19,8 @@ from typing import Any, Awaitable, Callable
 
 import websockets
 
+from ... import logger
+
 RemoteHandler = Callable[[dict, dict], Awaitable[None]]
 
 
@@ -41,18 +43,40 @@ class BusClient:
         self._seq = 0
         self._pub_waiters: dict[int, asyncio.Future] = {}
         self._fatal: str | None = None
+        self._log_relay: asyncio.Task | None = None
+        self._log_stop = asyncio.Event()
 
     # ── 生命周期 ──────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
         """后台连接(断线指数退避重连);等首次就绪或首个致命错误。"""
         self._task = asyncio.create_task(self._run(), name=f"busclient:{self._domain}")
+        # 结构化日志中继:订阅本进程全量日志 → 逐条经 ws 送主进程 reinject(断连时丢弃)。
+        # 走网关即自动获得——远程域无需任何业务代码;字段保真(含 phase / 临时进度)。
+        self._log_relay = asyncio.create_task(
+            logger.relay(self._send_log, stop=self._log_stop),
+            name=f"logrelay:{self._domain}")
         while not self._ready.is_set() and self._fatal is None:
             await asyncio.sleep(0.02)
         if self._fatal:
             raise GatewayError(self._fatal)
 
+    async def _send_log(self, record: dict) -> None:
+        """把一条结构化日志 record 作 log 帧送主进程(未连即丢弃——日志是有损遥测,
+        绝不阻塞/反噬业务)。单向、无 ack。"""
+        ws = self._ws
+        if ws is None:
+            return
+        try:
+            await ws.send(json.dumps({"t": "log", "record": record}, ensure_ascii=False))
+        except Exception:  # noqa: BLE001 — 断线/背压:丢弃这条,不影响业务
+            pass
+
     async def close(self) -> None:
+        self._log_stop.set()
+        if self._log_relay is not None:
+            self._log_relay.cancel()
+            await asyncio.gather(self._log_relay, return_exceptions=True)
         if self._task is not None:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)

@@ -10,6 +10,7 @@
   C→S  {"t":"hello","domain":d,"token":t}
   S→C  {"t":"hello_ok"} | {"t":"error","msg":…}(随后断开)
   C→S  {"t":"publish","seq":n,"topic":…,"payload":{…},"corr":…?}
+  C→S  {"t":"log","record":{…}}  远程域结构化日志中继(单向遥测,无 ack)→ 主进程 reinject
   S→C  {"t":"pub_ok","seq":n,"msg_id":…} | {"t":"pub_err","seq":n,"msg":…}
   S→C  {"t":"deliver","did":n,"slot":…,"topic":…,"payload":{…},"msg_id":…,"corr":…}
   C→S  {"t":"ack","did":n} | {"t":"nack","did":n,"err":…}
@@ -156,6 +157,10 @@ class GatewayServer:
                         fut.set_result(str(m.get("err", "远端处理失败")))
                 elif t == "publish":
                     await self._remote_publish(ws, domain, m)
+                elif t == "log":
+                    # 远程域结构化日志中继:字段保真重注入本进程 logger(照常进
+                    # 控制台/hub_logs/SSE);比 supervisor 文本泵强(保留 phase/临时进度)。
+                    logger.reinject(m.get("record") or {})
         except (websockets.ConnectionClosed, asyncio.TimeoutError, json.JSONDecodeError):
             pass
         finally:
