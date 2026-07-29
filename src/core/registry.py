@@ -48,11 +48,12 @@ def _check_pattern(pattern: str, domain: str) -> None:
 
 def validate_header(
     header: ModuleType, expected_domain: str | None = None
-) -> tuple[str, dict[str, type[Message]], dict[str, str], set[str]]:
-    """校验一份头文件,返回 (domain, publishes, subscribes, ephemeral)。
+) -> tuple[str, dict[str, type[Message]], dict[str, str], set[str], set[str]]:
+    """校验一份头文件,返回 (domain, publishes, subscribes, ephemeral, volatile)。
 
-    EPHEMERAL(可选声明):本域 topic 的子集,标记为纯遥测——跳过持久账本,
-    不抗崩溃、不重试。默认全部持久,只有显式声明的才降级。"""
+    EPHEMERAL(可选):本域 topic 子集,纯遥测——跳过账本、不抗崩溃、不重试、不计投递。
+    VOLATILE(可选):本域 topic 子集,易失命令/事件——同样跳过账本、at-most-once,
+    但是工作消息(计入发布/投递、受悬空校验约束)。二者互斥;默认全部持久。"""
     for attr in ("DOMAIN", "PUBLISHES", "SUBSCRIBES"):
         if not hasattr(header, attr):
             raise BusDeclarationError(f"{header.__name__}: 缺少声明 {attr}")
@@ -78,7 +79,14 @@ def validate_header(
     if ephemeral - publishes.keys():
         raise BusDeclarationError(
             f"{domain}: EPHEMERAL 含未发布的 topic {sorted(ephemeral - publishes.keys())}")
-    return domain, publishes, subscribes, ephemeral
+    volatile: set[str] = set(getattr(header, "VOLATILE", ()) or ())
+    if volatile - publishes.keys():
+        raise BusDeclarationError(
+            f"{domain}: VOLATILE 含未发布的 topic {sorted(volatile - publishes.keys())}")
+    if volatile & ephemeral:
+        raise BusDeclarationError(
+            f"{domain}: topic 不能同时是 EPHEMERAL 与 VOLATILE {sorted(volatile & ephemeral)}")
+    return domain, publishes, subscribes, ephemeral, volatile
 
 
 def load_header(domain: str) -> ModuleType:

@@ -169,10 +169,14 @@ async def serve(config_path: str | None = None) -> None:
         "on_publish_discard": lambda env: svc_holder["scheduler"].on_publish_discard(env),
         "on_schedule_due": lambda env: svc_holder["scheduler"].on_schedule_due(env),
         "on_monitor_discovered": lambda env: svc_holder["scheduler"].on_monitor_discovered(env),
+        "on_job_finished": lambda env: svc_holder["scheduler"].on_job_finished(env),
+        "on_job_progress": lambda env: svc_holder["scheduler"].on_job_progress(env),
         "on_publish_finished": lambda env: svc_holder["scheduler"].on_publish_finished(env),
         "on_channel_targets_edit": lambda env: svc_holder["scheduler"].on_channel_targets_edit(env),
     }
     task_handlers: Handlers = {
+        "on_run_requested": lambda env: svc_holder["task_runner"].on_run_requested(env),
+        "on_cancel": lambda env: svc_holder["task_runner"].on_cancel(env),
         "on_settings_edit": lambda env: svc_holder["task_ops"].on_settings_edit(env),
         "on_job_deleted": lambda env: svc_holder["task_ops"].on_job_deleted(env),
     }
@@ -237,6 +241,11 @@ async def serve(config_path: str | None = None) -> None:
 
     from .task.impl.ops_service import TaskOpsService
     svc_holder["task_ops"] = TaskOpsService(store, store_windows["task"])
+
+    # task 执行器:领 scheduler 的 run_requested、跑管线、回 finished(执行交接经总线)
+    from .task.impl.runner_service import TaskRunnerService
+    svc_holder["task_runner"] = TaskRunnerService(
+        windows["task"], asyncio.get_running_loop())
 
     # 管线注册(可插拔:每管线一行;加新任务类型只增不改)
     from .task.impl.digest_pipeline import register_news_digest

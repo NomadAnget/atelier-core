@@ -126,7 +126,8 @@ class Bus:
         self._put_timeout = put_timeout
         self._domains: set[str] = set()
         self._topics: dict[str, tuple[str, type[Message]]] = {}   # topic → (拥有域, schema)
-        self._ephemeral: set[str] = set()
+        self._ephemeral: set[str] = set()   # 纯遥测:不落账本、不计投递
+        self._volatile: set[str] = set()    # 易失命令:不落账本、at-most-once,但计投递
         self._subs: list[_Subscription] = []
         self._retry_tasks: set[asyncio.Task] = set()
         self._recover_boundary = 0
@@ -162,7 +163,7 @@ class Bus:
 
     def mount(self, header: ModuleType, handlers: dict[str, Handler] | None = None) -> Window:
         """挂载一个域:校验头文件声明,绑定订阅槽位,返回该域的发布窗口。"""
-        domain, publishes, subscribes, ephemeral = validate_header(header)
+        domain, publishes, subscribes, ephemeral, volatile = validate_header(header)
         if domain in self._domains:
             raise BusError(f"域 '{domain}' 已挂载")
         handlers = handlers or {}
@@ -177,6 +178,7 @@ class Bus:
         self._declared[domain] = (publishes, subscribes)
         self._topics.update({t: (domain, s) for t, s in publishes.items()})
         self._ephemeral |= ephemeral
+        self._volatile |= volatile
         for pattern, slot in subscribes.items():
             sub = _Subscription(domain=domain, pattern=pattern, slot=slot,
                                 handler=handlers[slot],
@@ -236,8 +238,10 @@ class Bus:
         msg_id = uuid.uuid4().hex[:12]
         corr = correlation_id or _current_corr.get() or uuid.uuid4().hex[:12]
         jid: int | None = None
-        if matched and self._journal is not None and topic not in self._ephemeral:
-            # 持久:先落盘(消息 + 每订阅投递账,单事务),再入队 —— 崩溃必达
+        transient = topic in self._ephemeral or topic in self._volatile
+        if matched and self._journal is not None and not transient:
+            # 持久:先落盘(消息 + 每订阅投递账,单事务),再入队 —— 崩溃必达。
+            # EPHEMERAL/VOLATILE 均跳过账本(at-most-once,jid=None → 不重试)。
             jid = await self._journal.append(
                 topic, source, payload.model_dump_json(), msg_id, corr,
                 [s.key for s in matched])
@@ -247,8 +251,9 @@ class Bus:
 
         self.stats["published"] += 1
         if topic in self._ephemeral:
-            # 遥测分账:EPHEMERAL 无订阅账、走观察者旁路(SSE/哨兵)——它推高"已发布"
-            # 却永不产生"已投递",观测台分开呈现两种量纲,免得数字反差引人误读。
+            # 遥测分账:EPHEMERAL 是纯观测量纲,单列"已发布(遥测)"、且其签收不计"已投递"
+            # (见 _handle)——高频遥测不污染工作投递账。VOLATILE 虽也跳账本,但属工作
+            # 量纲(计入发布与投递),故不在此列。观测台:发布=published−ephemeral(持久+易失)。
             self.stats["published_ephemeral"] += 1
         self._topic_counts[topic] = self._topic_counts.get(topic, 0) + 1
         record = {"ts": env.published_at, "source": source, "topic": topic,
@@ -353,7 +358,9 @@ class Bus:
         token = _current_corr.set(env.correlation_id)   # 因果链:handler 内续发自动携带
         try:
             await sub.handler(env)
-            self.stats["delivered"] += 1
+            if env.topic not in self._ephemeral:
+                # 投递账只记工作量纲(持久 + VOLATILE);纯遥测的签收不计,免高频淹没
+                self.stats["delivered"] += 1
             if env.journal_id is not None and self._journal is not None:
                 await self._journal.mark_done(env.journal_id, sub.key)
         except asyncio.CancelledError:

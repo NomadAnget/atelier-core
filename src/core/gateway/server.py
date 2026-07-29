@@ -69,7 +69,7 @@ class GatewayServer:
 
     def remote_handlers(self, header) -> dict[str, Handler]:
         """把某域声明为远程:返回该域全部订阅槽位的转发处理器。"""
-        domain, _pub, subscribes, _eph = validate_header(header)
+        domain, _pub, subscribes, _eph, _vol = validate_header(header)
         rd = self._remotes.setdefault(domain, _RemoteDomain())
         return {slot: self._make_handler(rd, domain, slot)
                 for slot in set(subscribes.values())}
