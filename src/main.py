@@ -182,6 +182,7 @@ async def serve(config_path: str | None = None) -> None:
     }
     daemons_handlers: Handlers = {
         "on_job_status": lambda env: svc_holder["monitor"].on_job_status(env),
+        "on_job_deleted": lambda env: svc_holder["monitor"].on_job_deleted(env),
         "on_auth_expired": lambda env: svc_holder["monitor"].on_auth_expired(env),
         "on_channel_add": lambda env: svc_holder["monitor"].on_channel_add(env),
         "on_channel_edit": lambda env: svc_holder["monitor"].on_channel_edit(env),
