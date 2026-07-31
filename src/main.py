@@ -246,19 +246,42 @@ async def serve(config_path: str | None = None) -> None:
     # task 执行器:领 scheduler 的 run_requested、跑管线、回 finished(执行交接经总线)
     from .task.impl.runner_service import TaskRunnerService
     svc_holder["task_runner"] = TaskRunnerService(
-        windows["task"], asyncio.get_running_loop())
+        windows["task"], asyncio.get_running_loop(), hub=store)
 
     # 管线注册(可插拔:每管线一行;加新任务类型只增不改)
     from .task.impl.digest_pipeline import register_news_digest
     register_news_digest(store, store_windows["task"], asyncio.get_running_loop(),
                          bus_win=windows["task"])   # items_used 事件发布(池归 daemons)
 
+    # 监督器提前构造(声明校验;eager 子进程在下方 start() 才拉起)——
+    # task 远程形态下 scheduler 构造需要它的懒起控制器
+    from .supervisor import Supervisor
+    supervisor = Supervisor(cfg.supervisor.children)
+
+    # task 执行进程起停控制器(README「task 执行进程」节):远程形态才注入。
+    # 约定懒起子进程名 "task-worker"(config [[supervisor.children]] lazy=true)。
+    _TASK_CHILD = "task-worker"
+    task_proc_ctl = None
+    if cfg.gateway.enabled and "task" in cfg.gateway.remote_domains:
+        declared = {c.get("name") for c in cfg.supervisor.children}
+        if _TASK_CHILD not in declared:   # 显式失败:声明远程却没有可拉起的进程
+            raise RuntimeError(
+                f"task 声明为远程域,但 supervisor.children 缺 '{_TASK_CHILD}'(lazy)")
+        from types import SimpleNamespace
+        task_proc_ctl = SimpleNamespace(
+            ensure=lambda: supervisor.ensure_child(_TASK_CHILD),
+            stop=lambda: supervisor.stop_child(_TASK_CHILD))
+
     from .scheduler.impl.publish_service import PublishService
     from .scheduler.impl.service import JobSchedulerService
     job_scheduler_svc = JobSchedulerService(
         windows["scheduler"], store, store_windows["scheduler"],
-        publish_service=PublishService(windows["scheduler"], store))
+        publish_service=PublishService(windows["scheduler"], store),
+        task_process=task_proc_ctl)
     svc_holder["scheduler"] = job_scheduler_svc
+    if task_proc_ctl is not None:
+        # 执行进程意外退出 → 在跑任务置 failed + 放行串行队列(故障隔离的收拾半边)
+        supervisor.set_exit_listener(_TASK_CHILD, job_scheduler_svc.on_task_process_exit)
 
     from .platform_adapters.impl.service import ConnectionService
     svc_holder["connections"] = ConnectionService(
@@ -308,9 +331,7 @@ async def serve(config_path: str | None = None) -> None:
             log_config=None, access_log=False))
         web_task = asyncio.create_task(web_server.serve(), name="web")
 
-    from .supervisor import Supervisor
-    supervisor = Supervisor(cfg.supervisor.children)
-    await supervisor.start()
+    await supervisor.start()          # eager 子进程拉起(实例已在 scheduler 段提前构造)
 
     housekeeping_task = asyncio.create_task(
         _housekeeping_loop(bus, store, cfg.retention), name="housekeeping")

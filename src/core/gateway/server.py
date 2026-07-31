@@ -77,6 +77,11 @@ class GatewayServer:
     def _make_handler(self, rd: _RemoteDomain, domain: str, slot: str) -> Handler:
         async def forward(env) -> None:
             while True:                                   # 断线重发环(不烧重试次数)
+                # VOLATILE 在途断线即放弃(不重发):易失命令 at-most-once,收件进程
+                # 死在投递中途=交接作废。首连等待不属放弃范围——远端刚被懒拉起、尚未
+                # 连上网关时首次投递照常等连接(冷启动窗口,仍是首投)。跨窗口陈旧
+                # 命令由收端执行前状态校验兜底(task 读 jobs 非 running 即弃)。
+                volatile = self._bus is not None and env.topic in self._bus.volatile_topics
                 await rd.connected.wait()
                 self._seq += 1
                 did = self._seq
@@ -89,7 +94,10 @@ class GatewayServer:
                         "corr": env.correlation_id}, ensure_ascii=False))
                     result = await asyncio.wait_for(fut, self._ack_timeout)
                 except (_Disconnected, websockets.ConnectionClosed):
-                    continue                              # 重连后原样重发
+                    if volatile:
+                        raise RuntimeError(
+                            f"远端 {domain} 断线,易失投递放弃 topic={env.topic}")
+                    continue                              # 持久投递:重连后原样重发
                 except asyncio.TimeoutError:
                     raise RuntimeError(
                         f"远端 {domain} ack 超时({self._ack_timeout:.0f}s)slot={slot}")

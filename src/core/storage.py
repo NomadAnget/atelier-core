@@ -206,6 +206,9 @@ class StorageHub:
             Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
             conn = sqlite3.connect(self._db_path, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
+            # 多进程语义:task 执行进程与主进程共写同一 store.db(WAL 跨进程
+            # 多读者+串行写者)——跨进程写锁竞争必须是等待而非 SQLITE_BUSY 立抛
+            conn.execute("PRAGMA busy_timeout=8000")
             actions: list[str] = []
             for table, spec in self._specs.items():
                 actions += StorageHub._maybe_rename(conn, table, spec)
@@ -416,7 +419,9 @@ class StorageHub:
         """只读连接(每次读独立开):WAL 允许任意多读者与单写者并行。"""
         if self._conn is None:
             raise StoreError("存储枢纽未启动(先 await start())")
-        return sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True)
+        rc = sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True)
+        rc.execute("PRAGMA busy_timeout=8000")   # 跨进程检查点等待而非立抛
+        return rc
 
     async def kernel_purge(self, table: str, where: str, params: tuple) -> int:
         """内核表专用清理(内务循环用);对域表调用抛错——域数据归域管。"""

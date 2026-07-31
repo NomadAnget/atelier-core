@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from typing import Any
 
 from . import logger
 
@@ -37,8 +38,8 @@ def _validate_children(children: tuple | list) -> list[dict]:
     specs: list[dict] = []
     for i, raw in enumerate(children):
         if not isinstance(raw, dict):
-            raise SupervisorError(f"children[{i}] 必须是表(name/cmd/cwd/env)")
-        unknown = raw.keys() - {"name", "cmd", "cwd", "env"}
+            raise SupervisorError(f"children[{i}] 必须是表(name/cmd/cwd/env/lazy)")
+        unknown = raw.keys() - {"name", "cmd", "cwd", "env", "lazy"}
         if unknown:
             raise SupervisorError(f"children[{i}] 含未知键 {sorted(unknown)}")
         name, cmd = raw.get("name"), raw.get("cmd")
@@ -50,8 +51,12 @@ def _validate_children(children: tuple | list) -> list[dict]:
         env = raw.get("env") or {}
         if not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
             raise SupervisorError(f"子进程 '{name}' 的 env 键值必须都是字符串")
+        lazy = raw.get("lazy", False)
+        if not isinstance(lazy, bool):
+            raise SupervisorError(f"子进程 '{name}' 的 lazy 必须是布尔")
         specs.append({"name": name, "cmd": list(cmd),
-                      "cwd": raw.get("cwd") or None, "env": dict(env)})
+                      "cwd": raw.get("cwd") or None, "env": dict(env),
+                      "lazy": lazy})
     return specs
 
 
@@ -64,14 +69,102 @@ class Supervisor:
         self._tasks: list[asyncio.Task] = []
         self._procs: dict[str, asyncio.subprocess.Process] = {}
         self._stopping = False
+        # 懒起子进程:每名一把锁(ensure/stop 互斥)+ 预期退出标记 + 退出监听
+        self._lazy_locks: dict[str, asyncio.Lock] = {}
+        self._expected_exit: set[str] = set()
+        self._exit_listeners: dict[str, Any] = {}
 
     async def start(self) -> None:
         for spec in self._specs:
+            if spec["lazy"]:
+                continue          # 懒起子进程不随启动拉起,由需求方 ensure_child
             self._tasks.append(asyncio.create_task(
                 self._run_child(spec), name=f"supervisor:{spec['name']}"))
         if self._specs:
-            logger.info("监督器上岗:%s", ", ".join(s["name"] for s in self._specs),
+            logger.info("监督器上岗:%s", ", ".join(
+                s["name"] + ("(lazy)" if s["lazy"] else "") for s in self._specs),
+                layer="CORE", component="Supervisor")
+
+    # ── 懒起子进程(按需拉起 / 需求方停止 / 意外退出回调)────────────────────────
+
+    def set_exit_listener(self, name: str, cb: Any) -> None:
+        """登记懒起子进程的意外退出回调 cb(rc)(组装点接线;stop_child 发起的
+        预期退出不触发)。cb 可为同步函数或协程函数。"""
+        self._exit_listeners[name] = cb
+
+    def _lazy_spec(self, name: str) -> dict:
+        spec = next((s for s in self._specs if s["name"] == name), None)
+        if spec is None or not spec["lazy"]:
+            raise SupervisorError(f"'{name}' 不是已声明的懒起子进程")
+        return spec
+
+    def child_alive(self, name: str) -> bool:
+        proc = self._procs.get(name)
+        return proc is not None and proc.returncode is None
+
+    async def ensure_child(self, name: str) -> None:
+        """按需拉起(幂等):已在跑即返回;停机中拒绝。竞态由每名锁串行化。"""
+        spec = self._lazy_spec(name)
+        async with self._lazy_locks.setdefault(name, asyncio.Lock()):
+            if self._stopping:
+                raise SupervisorError(f"停机中,拒绝拉起 '{name}'")
+            if self.child_alive(name):
+                return
+            self._expected_exit.discard(name)
+            child_env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+            proc = await asyncio.create_subprocess_exec(
+                *spec["cmd"], cwd=spec["cwd"], env={**child_env, **spec["env"]},
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                preexec_fn=_die_with_parent)
+            self._procs[name] = proc
+            self._tasks.append(asyncio.create_task(
+                self._watch_lazy_child(name, proc), name=f"supervisor:{name}"))
+            logger.info("懒起子进程启动 %s pid=%d", name, proc.pid,
                         layer="CORE", component="Supervisor")
+
+    async def stop_child(self, name: str) -> None:
+        """需求方发起的优雅停止(幂等):SIGTERM→宽限→SIGKILL;不触发退出监听。"""
+        self._lazy_spec(name)
+        async with self._lazy_locks.setdefault(name, asyncio.Lock()):
+            proc = self._procs.get(name)
+            if proc is None or proc.returncode is not None:
+                return
+            self._expected_exit.add(name)
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=self._grace)
+            except asyncio.TimeoutError:
+                logger.warning("懒起子进程 %s 宽限期未退,强杀", name,
+                               layer="CORE", component="Supervisor")
+                proc.kill()
+                await proc.wait()
+            logger.info("懒起子进程已停 %s", name, layer="CORE", component="Supervisor")
+
+    async def _watch_lazy_child(self, name: str, proc) -> None:
+        """守护一次懒起进程的生命期:接管输出 → 等退出 → 意外退出通知监听。
+        不重启——生死归需求方。"""
+        assert proc.stdout is not None
+        async for raw in proc.stdout:
+            line = raw.decode(errors="replace").rstrip()
+            if line:
+                logger.info("%s", line, layer="SUBPROC", component=name)
+        rc = await proc.wait()
+        self._procs.pop(name, None)
+        if self._stopping or name in self._expected_exit:
+            self._expected_exit.discard(name)
+            return
+        logger.warning("懒起子进程 %s 意外退出 rc=%s(不自动重启,通知需求方)",
+                       name, rc, layer="CORE", component="Supervisor")
+        cb = self._exit_listeners.get(name)
+        if cb is not None:
+            try:
+                r = cb(rc)
+                if asyncio.iscoroutine(r):
+                    await r
+            except Exception as exc:  # noqa: BLE001 — 监听故障不反噬监督器
+                logger.error("退出监听回调异常 %s err=%s", name, exc,
+                             layer="CORE", component="Supervisor")
 
     def begin_shutdown(self) -> None:
         """停机第一步(同步、幂等):立刻禁重启。必须早于停机链其余 await——否则

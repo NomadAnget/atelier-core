@@ -66,7 +66,7 @@ class SentinelCfg:
 
 @dataclass(frozen=True)
 class SupervisorCfg:
-    children: tuple = ()             # [[supervisor.children]]:name/cmd 必填,cwd/env 可选
+    children: tuple = ()             # [[supervisor.children]]:name/cmd 必填,cwd/env/lazy 可选
 
 
 @dataclass(frozen=True)

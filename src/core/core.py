@@ -159,6 +159,11 @@ class Bus:
         entry = self._topics.get(topic)
         return entry[1] if entry else None
 
+    @property
+    def volatile_topics(self) -> frozenset[str]:
+        """易失命令 topic 集(网关"VOLATILE 断线放弃"语义据此判定)。"""
+        return frozenset(self._volatile)
+
     # ── 挂载 ──────────────────────────────────────────────────────────────
 
     def mount(self, header: ModuleType, handlers: dict[str, Handler] | None = None) -> Window:

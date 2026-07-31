@@ -71,6 +71,16 @@ def set_level(level: str) -> None:
     _LOGGER.setLevel(getattr(logging, level.upper(), logging.INFO))
 
 
+def detach_console() -> None:
+    """摘掉控制台 handler(task 执行进程用):其日志经网关结构化中继回主进程,
+    若再上 stdout 会被监督器文本泵二次采集(SUBPROC 重复行)。detach 后
+    console_only 刷屏行即静默(可弃遥测);文本泵只兜第三方裸 print。"""
+    if not _configured:
+        setup()
+    for h in [h for h in _LOGGER.handlers if isinstance(h, logging.StreamHandler)]:
+        _LOGGER.removeHandler(h)
+
+
 # ── 订阅流(SSE/哨兵消费;不阻塞、不反噬)──────────────────────────────────────
 
 def subscribe(maxsize: int = 512) -> asyncio.Queue:

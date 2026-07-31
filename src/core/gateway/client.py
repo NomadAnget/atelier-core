@@ -46,6 +46,11 @@ class BusClient:
         self._log_relay: asyncio.Task | None = None
         self._log_stop = asyncio.Event()
 
+    def bind(self, slot: str, handler: RemoteHandler) -> None:
+        """注册/替换一个订阅槽位处理器(start 前调用;构造后期绑定,供
+        '处理器需要 client 引用'的服务先建 client 再接线)。"""
+        self._handlers[slot] = handler
+
     # ── 生命周期 ──────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
