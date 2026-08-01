@@ -174,11 +174,13 @@ async def serve(config_path: str | None = None) -> None:
         "on_publish_finished": lambda env: svc_holder["scheduler"].on_publish_finished(env),
         "on_channel_targets_edit": lambda env: svc_holder["scheduler"].on_channel_targets_edit(env),
     }
+    # task 域装配交给基础设施(composition + 域 build.py 唯一真源);handlers 经运行时
+    # holder 后期绑定(build 在 build_store 后调,填 _task_rt)。task 是 process 域时,
+    # 这些 handler 被网关转发覆盖(remote_handlers.update),仅 local 回退形态才用。
+    _task_rt: dict = {}
     task_handlers: Handlers = {
-        "on_run_requested": lambda env: svc_holder["task_runner"].on_run_requested(env),
-        "on_cancel": lambda env: svc_holder["task_runner"].on_cancel(env),
-        "on_settings_edit": lambda env: svc_holder["task_ops"].on_settings_edit(env),
-        "on_job_deleted": lambda env: svc_holder["task_ops"].on_job_deleted(env),
+        slot: (lambda env, s=slot: _task_rt["h"][s](env))
+        for slot in ("on_run_requested", "on_cancel", "on_settings_edit", "on_job_deleted")
     }
     daemons_handlers: Handlers = {
         "on_job_status": lambda env: svc_holder["monitor"].on_job_status(env),
@@ -210,15 +212,21 @@ async def serve(config_path: str | None = None) -> None:
                                             "daemons": daemons_handlers,
                                             "platform_adapters": platform_adapters_handlers,
                                             "engines": engines_handlers}
-    if cfg.gateway.enabled and cfg.gateway.remote_domains:
+    # 网关转发的域 = 外部远程域(config.remote_domains)+ 进程域(build.py KIND=process,
+    # 执行在子进程,主进程只转发)。进程域由 KIND 声明驱动——"改形态只改 build.py 一行"。
+    from .composition import domain_kind
+    from .core.registry import discover_headers as _disc
+    _process_domains = [d for d in _disc() if domain_kind(d) == "process"]
+    _forward_domains = list(dict.fromkeys(list(cfg.gateway.remote_domains) + _process_domains))
+    if cfg.gateway.enabled and _forward_domains:
         from .core.gateway.server import GatewayServer
         from .core.registry import load_header
         gateway = GatewayServer(host=cfg.gateway.host, port=cfg.gateway.port,
                                 token=cfg.gateway.token,
                                 ack_timeout=cfg.gateway.ack_timeout)
-        # 合并而非覆盖:远程域只接管自己声明的槽位,本地域(scheduler/task/daemons)照旧
+        # 合并而非覆盖:被转发域的槽位交网关(执行在别处),其余本地域照旧
         remote_handlers.update({d: gateway.remote_handlers(load_header(d))
-                                for d in cfg.gateway.remote_domains})
+                                for d in _forward_domains})
 
     bus, windows = await build_hub(
         remote_handlers, fill_noop=True, journal_db=cfg.paths.journal_db,
@@ -240,33 +248,34 @@ async def serve(config_path: str | None = None) -> None:
     svc_holder["engines_settings_edit"] = edit_handler(engines_settings, "engines")
     await engines_settings.get()        # 启动落种:前端设置页立现 engines 节
 
-    from .task.impl.ops_service import TaskOpsService
-    svc_holder["task_ops"] = TaskOpsService(store, store_windows["task"])
-
-    # task 执行器:领 scheduler 的 run_requested、跑管线、回 finished(执行交接经总线)
-    from .task.impl.runner_service import TaskRunnerService
-    svc_holder["task_runner"] = TaskRunnerService(
-        windows["task"], asyncio.get_running_loop(), hub=store)
-
-    # 管线注册(可插拔:每管线一行;加新任务类型只增不改)
-    from .task.impl.digest_pipeline import register_news_digest
-    register_news_digest(store, store_windows["task"], asyncio.get_running_loop(),
-                         bus_win=windows["task"])   # items_used 事件发布(池归 daemons)
+    # task 域装配:基础设施调域 build.py(唯一真源:门面 init + 管线注册 + 服务构造)。
+    # task 是 process 域——在主进程调 build 仅为填 registry 元数据(web 建任务表单读
+    # create_specs)+ local 回退;真执行在子进程(见 composition.run_domain_subprocess)。
+    from .composition import BuildContext
+    from .task import build as task_build
+    _task_ctx = BuildContext(hub=store, stores=store_windows, publish=windows["task"],
+                             loop=asyncio.get_running_loop(), cfg=cfg, bus=bus)
+    _task_rt["h"] = task_build.build(_task_ctx).handlers
 
     # 监督器提前构造(声明校验;eager 子进程在下方 start() 才拉起)——
-    # task 远程形态下 scheduler 构造需要它的懒起控制器
-    from .supervisor import Supervisor
-    supervisor = Supervisor(cfg.supervisor.children)
+    # task 远程形态下 scheduler 构造需要它的懒起控制器。
+    # 子进程 = 外部哑进程(config 声明,部署事实)+ 进程域(KIND=process,启动命令
+    # 由框架推导 `python -m src.remote <域>`,不写进 config——域声明类型,基础设施起)。
+    import sys as _sys
 
-    # task 执行进程起停控制器(README「task 执行进程」节):远程形态才注入。
-    # 约定懒起子进程名 "task-worker"(config [[supervisor.children]] lazy=true)。
+    from .composition import load_build
+    from .supervisor import Supervisor
+    _proc_children = [{
+        "name": f"{d}-worker",
+        "cmd": [_sys.executable, "-m", "src.remote", d],
+        "lazy": bool((getattr(load_build(d), "PROCESS", {}) or {}).get("lazy", True)),
+    } for d in _process_domains]
+    supervisor = Supervisor(list(cfg.supervisor.children) + _proc_children)
+
+    # task 执行进程起停控制器(README「task 执行进程」节):process 域才注入。
     _TASK_CHILD = "task-worker"
     task_proc_ctl = None
-    if cfg.gateway.enabled and "task" in cfg.gateway.remote_domains:
-        declared = {c.get("name") for c in cfg.supervisor.children}
-        if _TASK_CHILD not in declared:   # 显式失败:声明远程却没有可拉起的进程
-            raise RuntimeError(
-                f"task 声明为远程域,但 supervisor.children 缺 '{_TASK_CHILD}'(lazy)")
+    if cfg.gateway.enabled and "task" in _process_domains:
         from types import SimpleNamespace
         task_proc_ctl = SimpleNamespace(
             ensure=lambda: supervisor.ensure_child(_TASK_CHILD),
@@ -291,10 +300,7 @@ async def serve(config_path: str | None = None) -> None:
     svc_holder["ingest"] = pa_ingest.init(store, store_windows["platform_adapters"])
     from .platform_adapters import youtube_token
     youtube_token.init(store, store_windows["platform_adapters"])   # OAuth token 入库(本域写方)
-
-    # video_translate 注册(#7):依赖 ingest(下载/cookie),故在其后接线
-    from .task.impl.pipelines.video_translate.runner import register_video_translate
-    register_video_translate(store, store_windows["task"], asyncio.get_running_loop())
+    # (video_translate/news_digest 管线注册已并入 task_build.build 上面一处调用)
     yt_mirror_task = asyncio.create_task(
         svc_holder["connections"].run_youtube_mirror_loop(), name="yt_mirror")
     scheduler_worker = asyncio.create_task(job_scheduler_svc.run_worker(),
