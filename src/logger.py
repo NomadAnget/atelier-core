@@ -127,17 +127,22 @@ def _fanout(level: str, layer: str, component: str, message: str,
 # ── 记录 API(与旧 logger 同形)───────────────────────────────────────────────
 
 def progress(msg: str, *, layer: str = "", component: str = "",
-             key: str = "", frac: float | None = None, done: bool = False) -> None:
+             key: str = "", frac: float | None = None, waiting: bool = False,
+             done: bool = False) -> None:
     """临时进度行:**只进程内扇出(SSE 实时),不落 hub_logs、不进控制台**。
 
-    带稳定 ``key`` → 前端按 key **原地更新同一行**(``done=True`` 清除该行);
-    ``frac`` ∈[0,1] 供渲染进度条。用于下载等长任务的 live 进度——黑匣子(hub_logs)
-    只留 start/finish 两行,不被高频进度污染;无 SSE 订阅者时零开销直接返回。"""
+    带稳定 ``key`` → 前端按 key **原地更新同一行**(``done=True`` 清除该行)。进度形态三选一:
+    - ``frac`` ∈[0,1]:**确定进度条**(知道总量,如下载%/逐句 i/n)。
+    - 不传 ``frac``:**不定量**(不知道总量的实时状态,前端渲动画滑块,不显百分比)。
+    - ``waiting=True``:**等待中**(尚未开始产出,如模型加载/排队,前端渲淡脉冲 + "等待中")。
+    无 SSE 订阅者时零开销直接返回;黑匣子(hub_logs)只留 start/finish 两行,不被高频进度污染。"""
     if not _subscribers:
         return
     extra: dict[str, Any] = {"ephemeral": True, "key": key}
     if frac is not None:
         extra["frac"] = frac
+    if waiting:
+        extra["waiting"] = True
     if done:
         extra["done"] = True
     _fanout("INFO", layer, component, msg, extra=extra)
