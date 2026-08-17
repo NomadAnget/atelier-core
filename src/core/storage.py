@@ -29,7 +29,7 @@ from types import ModuleType
 from typing import Any
 
 from .. import logger
-from .contracts import Record
+from .contracts import Record, settings_ui_spec
 from .registry import validate_schema
 
 _ENVELOPE = ("id", "kind", "data", "created_at", "updated_at")
@@ -442,6 +442,12 @@ class StorageHub:
                                            else sorted(spec["columns"]),
                                   "indexes": sorted(spec["indexes"]),
                                   "rows": n}
+                    # 设置表:附上从 Record 声明提取的字段 UI 规格 + 域中文名(前端设置页据此渲染,
+                    # 元数据不再前后端分散,见 contracts.Setting)。
+                    if not spec.get("typed") and "settings" in spec["kinds"]:
+                        model = spec["kinds"]["settings"]
+                        out[table]["settings_fields"] = settings_ui_spec(model)
+                        out[table]["settings_label"] = getattr(model, "SECTION_LABEL", "")
             return out
         return await asyncio.to_thread(_snap)
 
