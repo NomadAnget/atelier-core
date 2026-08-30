@@ -38,8 +38,8 @@ def _validate_children(children: tuple | list) -> list[dict]:
     specs: list[dict] = []
     for i, raw in enumerate(children):
         if not isinstance(raw, dict):
-            raise SupervisorError(f"children[{i}] 必须是表(name/cmd/cwd/env/lazy)")
-        unknown = raw.keys() - {"name", "cmd", "cwd", "env", "lazy"}
+            raise SupervisorError(f"children[{i}] 必须是表(name/cmd/cwd/env/lazy/dynamic_port)")
+        unknown = raw.keys() - {"name", "cmd", "cwd", "env", "lazy", "dynamic_port"}
         if unknown:
             raise SupervisorError(f"children[{i}] 含未知键 {sorted(unknown)}")
         name, cmd = raw.get("name"), raw.get("cmd")
@@ -54,10 +54,26 @@ def _validate_children(children: tuple | list) -> list[dict]:
         lazy = raw.get("lazy", False)
         if not isinstance(lazy, bool):
             raise SupervisorError(f"子进程 '{name}' 的 lazy 必须是布尔")
+        dyn = raw.get("dynamic_port", False)
+        if not isinstance(dyn, bool):
+            raise SupervisorError(f"子进程 '{name}' 的 dynamic_port 必须是布尔")
+        if dyn and not any("{port}" in c for c in cmd) and not any(
+                "{port}" in v for v in env.values()):
+            raise SupervisorError(
+                f"子进程 '{name}' 声明 dynamic_port 却无 {{port}} 占位(cmd/env 至少一处)")
         specs.append({"name": name, "cmd": list(cmd),
                       "cwd": raw.get("cwd") or None, "env": dict(env),
-                      "lazy": lazy})
+                      "lazy": lazy, "dynamic_port": dyn})
     return specs
+
+
+def _free_port() -> int:
+    """抓一个当前空闲的本机 TCP 端口(bind :0 由内核分配,立即释放交子进程占用)。
+    close 到子进程 bind 之间有极小 TOCTOU 窗口;边车启动即 bind,实践中无碍。"""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
 
 
 class Supervisor:
@@ -73,6 +89,35 @@ class Supervisor:
         self._lazy_locks: dict[str, asyncio.Lock] = {}
         self._expected_exit: set[str] = set()
         self._exit_listeners: dict[str, Any] = {}
+        # 动态端口:构造时一次性分配(消费方组装期即可 child_port 查),重启复用同口。
+        # 同批多个 dynamic_port 边车:持锁到全分配完再释放,避免抢到同一口。
+        self._ports: dict[str, int] = {}
+        _held = []
+        try:
+            import socket
+            for spec in self._specs:
+                if spec["dynamic_port"]:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.bind(("127.0.0.1", 0))
+                    self._ports[spec["name"]] = int(s.getsockname()[1])
+                    _held.append(s)
+        finally:
+            for s in _held:
+                s.close()
+
+    def child_port(self, name: str) -> int | None:
+        """动态分配给该子进程的端口(未声明 dynamic_port 则 None)。消费域拼地址用。"""
+        return self._ports.get(name)
+
+    def _resolve(self, spec: dict) -> tuple[list[str], dict[str, str]]:
+        """把 spec 的 cmd/env 里的 {port} 占位替换成分配到的端口(无 dynamic_port 则原样)。"""
+        port = self._ports.get(spec["name"])
+        if port is None:
+            return spec["cmd"], spec["env"]
+        p = str(port)
+        cmd = [c.replace("{port}", p) for c in spec["cmd"]]
+        env = {k: v.replace("{port}", p) for k, v in spec["env"].items()}
+        return cmd, env
 
     async def start(self) -> None:
         for spec in self._specs:
@@ -111,16 +156,18 @@ class Supervisor:
             if self.child_alive(name):
                 return
             self._expected_exit.discard(name)
+            cmd, spec_env = self._resolve(spec)     # {port} → 分配口
             child_env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
             proc = await asyncio.create_subprocess_exec(
-                *spec["cmd"], cwd=spec["cwd"], env={**child_env, **spec["env"]},
+                *cmd, cwd=spec["cwd"], env={**child_env, **spec_env},
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 preexec_fn=_die_with_parent)
             self._procs[name] = proc
             self._tasks.append(asyncio.create_task(
                 self._watch_lazy_child(name, proc), name=f"supervisor:{name}"))
-            logger.info("懒起子进程启动 %s pid=%d", name, proc.pid,
+            logger.info("懒起子进程启动 %s pid=%d%s", name, proc.pid,
+                        f" port={self._ports[name]}" if name in self._ports else "",
                         layer="CORE", component="Supervisor")
 
     async def stop_child(self, name: str) -> None:
@@ -201,10 +248,11 @@ class Supervisor:
                 # 子进程环境:剥掉父进程的 venv 指针——子进程各有自己的项目环境
                 # (publish-engine 自带 .venv),继承 VIRTUAL_ENV 会让子进程里的 uv
                 # 抱怨"env 不匹配将被忽略"(实为环境污染,非日志问题)。
+                cmd, spec_env = self._resolve(spec)     # {port} → 分配口
                 child_env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
                 proc = await asyncio.create_subprocess_exec(
-                    *spec["cmd"], cwd=spec["cwd"],
-                    env={**child_env, **spec["env"]},
+                    *cmd, cwd=spec["cwd"],
+                    env={**child_env, **spec_env},
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                     # 父死子随(PDEATHSIG):主进程无论怎么退(优雅/超时硬退/被杀),
@@ -225,7 +273,8 @@ class Supervisor:
                 proc.terminate()
                 await proc.wait()
                 return
-            logger.info("子进程启动 %s pid=%d", name, proc.pid,
+            logger.info("子进程启动 %s pid=%d%s", name, proc.pid,
+                        f" port={self._ports[name]}" if name in self._ports else "",
                         layer="CORE", component="Supervisor")
             assert proc.stdout is not None
             async for raw in proc.stdout:            # 输出接管:黑箱变白箱

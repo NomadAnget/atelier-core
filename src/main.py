@@ -175,12 +175,19 @@ async def serve(config_path: str | None = None) -> None:
         "on_channel_targets_edit": lambda env: svc_holder["scheduler"].on_channel_targets_edit(env),
     }
     # task 域装配交给基础设施(composition + 域 build.py 唯一真源);handlers 经运行时
-    # holder 后期绑定(build 在 build_store 后调,填 _task_rt)。task 是 process 域时,
-    # 这些 handler 被网关转发覆盖(remote_handlers.update),仅 local 回退形态才用。
+    # holder 后期绑定(build 在 build_store 后调,填 _task_rt)。**全部声明槽逐一字面接线**
+    # ——task 现为 local 域(常驻主进程),这份 dict 即真正生效的 handler;槽位字面列全
+    # (test_assembly_wiring AST 对拍 header 声明,漏一个即红灯,防 fill_noop 静默空转)。
     _task_rt: dict = {}
     task_handlers: Handlers = {
-        slot: (lambda env, s=slot: _task_rt["h"][s](env))
-        for slot in ("on_run_requested", "on_cancel", "on_settings_edit", "on_job_deleted")
+        "on_run_requested":       lambda env: _task_rt["h"]["on_run_requested"](env),
+        "on_cancel":              lambda env: _task_rt["h"]["on_cancel"](env),
+        "on_settings_edit":       lambda env: _task_rt["h"]["on_settings_edit"](env),
+        "on_kb_term_add":         lambda env: _task_rt["h"]["on_kb_term_add"](env),
+        "on_kb_term_edit":        lambda env: _task_rt["h"]["on_kb_term_edit"](env),
+        "on_kb_term_remove":      lambda env: _task_rt["h"]["on_kb_term_remove"](env),
+        "on_kb_candidates_clear": lambda env: _task_rt["h"]["on_kb_candidates_clear"](env),
+        "on_job_deleted":         lambda env: _task_rt["h"]["on_job_deleted"](env),
     }
     daemons_handlers: Handlers = {
         "on_job_status": lambda env: svc_holder["monitor"].on_job_status(env),
@@ -297,7 +304,8 @@ async def serve(config_path: str | None = None) -> None:
         windows["platform_adapters"], store, store_windows["platform_adapters"])
     from .platform_adapters import ingest as pa_ingest
     # 采集门面(域根白名单件);实例接总线槽位 on_settings_edit(采集设置编辑落库)
-    svc_holder["ingest"] = pa_ingest.init(store, store_windows["platform_adapters"])
+    svc_holder["ingest"] = pa_ingest.init(store, store_windows["platform_adapters"],
+                                          pot_port=supervisor.child_port("bgutil"))
     from .platform_adapters import youtube_token
     youtube_token.init(store, store_windows["platform_adapters"])   # OAuth token 入库(本域写方)
     # (video_translate/news_digest 管线注册已并入 task_build.build 上面一处调用)
