@@ -15,14 +15,16 @@ from pydantic_core import PydanticUndefined
 
 
 def Setting(default: Any = PydanticUndefined, *, label: str, widget: str = "auto",
-            options: list | None = None, secret: bool = False, hidden: bool = False,
+            options: "list | str | None" = None, secret: bool = False, hidden: bool = False,
             help: str = "", default_factory: Any = None) -> Any:
     """声明一个"自带 UI 元数据"的设置字段——中文名/控件/选项/密钥/隐藏全随字段就地声明,
     前端设置页据此渲染,元数据不再前后端分散(见 README「设置项=自带 UI 元数据的完整声明」)。
 
     label    中文名;
     widget   控件形式:auto(前端按值类型推)/text/password/select/number/toggle/textarea/voiceprint;
-    options  枚举下拉 ``[[值, 显示名], ...]``(widget=select);
+    options  枚举下拉 ``[[值, 显示名], ...]``(widget=select);也可传**引用串**
+             ``"@task_types.<task_type>.<字段>"``——前端从该管线 create_spec 的字段选项解析(单一真相源,
+             避免选项列表在设置与管线两处重复);
     secret   密码框遮罩(眼睛切换明文);hidden  不在通用设置页出(有专属 UI 的字段);help 辅助说明。
     default_factory 用于 list 等可变默认(与 default 二选一)。
     """
