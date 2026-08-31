@@ -40,6 +40,20 @@ def _type_name(ann: Any) -> str:
     return {bool: "boolean", int: "integer", float: "number", str: "string"}.get(ann, "string")
 
 
+SECRET_PLACEHOLDER = "••••••••"   # 密钥脱敏占位符(8 圆点):
+# 读取时非空 secret 字段的值替换为此(明文绝不出服务端);保存时收到此值=未改动 → 保持原值不覆盖。
+
+
+def secret_field_names(model: type[BaseModel]) -> set[str]:
+    """settings ``Record`` 中标了 ``secret=True`` 的字段名集合(密钥脱敏用:读取遮罩/保存保原)。"""
+    out: set[str] = set()
+    for name, fi in model.model_fields.items():
+        extra = fi.json_schema_extra if isinstance(fi.json_schema_extra, dict) else {}
+        if (extra.get("ui") or {}).get("secret"):
+            out.add(name)
+    return out
+
+
 def settings_ui_spec(model: type[BaseModel]) -> dict[str, dict]:
     """从 settings ``Record`` 提取每字段的 UI 规格(snapshot 附给前端)。未用 ``Setting`` 声明的
     字段走默认(label=字段名、widget=auto),仍可渲染——渐进迁移不崩。"""

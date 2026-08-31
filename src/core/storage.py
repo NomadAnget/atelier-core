@@ -29,7 +29,7 @@ from types import ModuleType
 from typing import Any
 
 from .. import logger
-from .contracts import Record, settings_ui_spec
+from .contracts import Record, secret_field_names, settings_ui_spec
 from .registry import validate_schema
 
 _ENVELOPE = ("id", "kind", "data", "created_at", "updated_at")
@@ -347,6 +347,15 @@ class StorageHub:
         return {"type": "typed" if typed else "envelope",
                 "owner": self._owners[table],
                 "filterable": filterable}
+
+    def secret_fields(self, table: str) -> set[str]:
+        """该 settings 表标了 ``secret=True`` 的字段名(密钥脱敏用);非 settings 表返回空集。
+        web 通用查询端点据此把密钥值遮罩成占位符,明文绝不出服务端。"""
+        spec = self._specs.get(table)
+        if not spec or spec.get("typed"):
+            return set()
+        model = (spec.get("kinds") or {}).get("settings")
+        return secret_field_names(model) if model else set()
 
     async def read(self, table: str, *, kind: str | None = None, where: str = "",
                    params: tuple = (), order_by: str | None = None,

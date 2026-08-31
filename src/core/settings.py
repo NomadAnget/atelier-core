@@ -18,7 +18,7 @@ import asyncio
 from typing import Any, Callable, Type
 
 from .. import logger
-from .contracts import Record
+from .contracts import SECRET_PLACEHOLDER, Record, secret_field_names
 from .storage import StorageHub, StoreWindow
 
 
@@ -66,6 +66,10 @@ class SettingsStore:
             return seed.model_dump()
 
     async def update(self, patch: dict[str, Any]) -> dict[str, Any]:
+        # 密钥脱敏回写:secret 字段收到占位符 = 前端未改动(它拿到的就是占位符)→ 剔除该键,保持原值不覆盖。
+        secret = secret_field_names(self._model)
+        patch = {k: v for k, v in patch.items()
+                 if not (k in secret and v == SECRET_PLACEHOLDER)}
         cur = await self.get()
         merged = self._model.model_validate({**cur, **patch})
         rows = await self._hub.read(self._table, kind="settings", limit=1)
