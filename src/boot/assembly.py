@@ -17,11 +17,11 @@ import logging
 import time
 from typing import Awaitable, Callable
 
-from . import logger
-from .core import Bus, Envelope, Window, discover_headers
-from .core.journal import Journal
-from .core.registry import discover_schemas
-from .core.storage import StorageHub, StoreWindow
+from ..core import logger
+from ..core import Bus, Envelope, Window, discover_headers
+from ..core.journal import Journal
+from ..core.registry import discover_schemas
+from ..core.storage import StorageHub, StoreWindow
 
 Handlers = dict[str, Callable[[Envelope], Awaitable[None]]]
 
@@ -86,7 +86,7 @@ async def build_hub(
         windows[domain] = bus.mount(header, handlers)
     dangling = bus.check_closure()
     if dangling:                      # 组装期红灯:持久消息不许"发布即蒸发"
-        from .core.registry import BusDeclarationError
+        from ..core.registry import BusDeclarationError
         raise BusDeclarationError(
             f"持久 topic 无任何订阅者:{dangling} —— 要么加订阅,要么声明 EPHEMERAL")
     await bus.start()
@@ -99,7 +99,7 @@ async def build_store(db_path: str | None = None) -> tuple[StorageHub, dict[str,
     Returns:
         (存储枢纽, {域名: 写窗口});读经 hub.read(自由),写只能走本域窗口。
     """
-    from .core.log_store import LOGS_COLUMNS, LOGS_INDEXES, LOGS_TABLE
+    from ..core.log_store import LOGS_COLUMNS, LOGS_INDEXES, LOGS_TABLE
     hub = StorageHub(db_path or "tmp/src_store.db")
     windows = {domain: hub.mount(schema)
                for domain, schema in discover_schemas().items()}

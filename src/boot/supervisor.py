@@ -18,7 +18,7 @@ import os
 import time
 from typing import Any
 
-from . import logger
+from ..core import logger
 
 
 class SupervisorError(Exception):

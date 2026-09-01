@@ -8,7 +8,7 @@ import 白名单豁免(与 main/supervisor 同列)。
 三类型:
   · local   —— 主进程内:build(主进程 ctx) → handlers 挂本地总线 + 起循环;
   · process —— 按需子进程:主进程搭网关转发 + lazy 子进程 + scheduler 起停;
-               子进程(`python -m src.remote <域>`,本模块 run_domain_subprocess)
+               子进程(`python -m src.boot.remote <域>`,本模块 run_domain_subprocess)
                调**同一** build(BusClient ctx)真执行;
   · remote  —— 异地/外部实现:无 build.py,网关转发,公民资格外部自取。
 
@@ -24,9 +24,9 @@ from dataclasses import dataclass, field
 from types import ModuleType, SimpleNamespace
 from typing import Any, Awaitable, Callable
 
-from . import config, logger
-from .core.registry import discover_headers, discover_schemas
-from .core.storage import StorageHub, StoreWindow
+from ..core import config, logger
+from ..core.registry import discover_headers, discover_schemas
+from ..core.storage import StorageHub, StoreWindow
 
 _ROOT = __package__ or "src"
 
@@ -98,13 +98,13 @@ def _adapt(handler: Handler, schema: Any) -> Callable[[dict, dict], Awaitable[No
 
 
 async def run_domain_subprocess(domain: str) -> None:
-    """process 域子进程宿主(`python -m src.remote <域>`)——通用,不为任何域特化。
+    """process 域子进程宿主(`python -m src.boot.remote <域>`)——通用,不为任何域特化。
 
     组装 = 开存储枢纽(挂全 schema,DDL 幂等)→ BusClient 接网关 → 调域 build()
     (与主进程同一份)→ 绑 handler → 起循环/落种 → 常驻直至信号。日志走结构化
     中继(BusClient 自动),detach 控制台防与监督器文本泵重复。
     """
-    from .core.gateway.client import BusClient
+    from ..core.gateway.client import BusClient
 
     cfg = config.load()
     logger.set_level(cfg.logger.level)

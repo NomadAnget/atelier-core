@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Awaitable, Callable, Optional
 
-from .. import logger
+from . import logger
 from .contracts import Message
 from .journal import Journal
 from .registry import validate_header

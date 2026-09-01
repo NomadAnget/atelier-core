@@ -28,7 +28,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from .. import logger
+from . import logger
 from .contracts import Record, secret_field_names, settings_ui_spec
 from .registry import validate_schema
 

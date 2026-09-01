@@ -94,7 +94,7 @@ def load_header(domain: str) -> ModuleType:
     return importlib.import_module(f"{_ROOT}.{domain}.header")
 
 
-RESERVED_DIRS = {"core", "services"}   # core=内核;services=远程域工作树宿主(部署事实,非域)
+RESERVED_DIRS = {"core", "boot", "services"}   # core=内核;services=远程域工作树宿主(部署事实,非域)
 
 
 def discover_headers() -> dict[str, ModuleType]:

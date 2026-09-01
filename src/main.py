@@ -15,8 +15,8 @@ import asyncio
 import logging
 import signal
 
-from . import logger
-from .assembly import (
+from .core import logger
+from .boot.assembly import (
     _acquire_single_instance_lock,
     _housekeeping_loop,
     build_hub,
@@ -27,7 +27,7 @@ from .assembly import (
 
 async def serve(config_path: str | None = None) -> None:
     """最小常驻:组装空/现有域 → 起 web(若域在)→ 等停止信号。产品仓按需扩写。"""
-    from . import config
+    from .core import config
     cfg = config.load(config_path)
     logger.set_level(cfg.logger.level)
     logger.info("基建配置来源:%s", cfg.source, layer="CORE", component="Main")

@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable, Type
 
-from .. import logger
+from . import logger
 from .contracts import SECRET_PLACEHOLDER, Record, secret_field_names
 from .storage import StorageHub, StoreWindow
 
