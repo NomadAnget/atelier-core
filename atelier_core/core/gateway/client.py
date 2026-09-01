@@ -19,7 +19,7 @@ from typing import Any, Awaitable, Callable
 
 import websockets
 
-from ... import logger
+from .. import logger
 
 RemoteHandler = Callable[[dict, dict], Awaitable[None]]
 

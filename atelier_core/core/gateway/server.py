@@ -31,7 +31,7 @@ from typing import Any
 
 import websockets
 
-from ... import logger
+from .. import logger
 from .. import Bus, Window
 from ..registry import validate_header
 
