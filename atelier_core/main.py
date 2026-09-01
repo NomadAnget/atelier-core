@@ -57,7 +57,7 @@ async def serve(config_path: str | None = None) -> None:
         import uvicorn
 
         from .web.impl.service import build_web_app       # 产品带 web 域时才有
-        web_app = build_web_app(bus, store, windows["web"])
+        web_app = build_web_app(bus, store, windows["web"], dist_dir=cfg.web.dist_dir or None)
         web_server = uvicorn.Server(uvicorn.Config(
             web_app, host=cfg.web.host, port=cfg.web.port,
             log_config=None, access_log=False))
