@@ -57,6 +57,7 @@ async def build_hub(
     queue_size: int = 4096,
     max_attempts: int = 3,
     put_timeout: float = 30.0,
+    domain_root: str | None = None,
 ) -> tuple[Bus, dict[str, Window]]:
     """组装枢纽:挂载 src/ 下全部域并启动总线。
 
@@ -75,7 +76,7 @@ async def build_hub(
     bus = Bus(journal=journal, queue_size=queue_size,
               max_attempts=max_attempts, put_timeout=put_timeout)
     windows: dict[str, Window] = {}
-    for domain, header in discover_headers().items():
+    for domain, header in discover_headers(domain_root).items():
         handlers = dict(provided.get(domain, {}))
         if fill_noop:
             async def _noop(env: Envelope) -> None:
@@ -93,7 +94,7 @@ async def build_hub(
     return bus, windows
 
 
-async def build_store(db_path: str | None = None) -> tuple[StorageHub, dict[str, StoreWindow]]:
+async def build_store(db_path: str | None = None, *, domain_root: str | None = None) -> tuple[StorageHub, dict[str, StoreWindow]]:
     """组装存储枢纽:发现全部域的 schema.py,挂载并自增量对齐数据库。
 
     Returns:
@@ -102,7 +103,7 @@ async def build_store(db_path: str | None = None) -> tuple[StorageHub, dict[str,
     from ..core.log_store import LOGS_COLUMNS, LOGS_INDEXES, LOGS_TABLE
     hub = StorageHub(db_path or "tmp/src_store.db")
     windows = {domain: hub.mount(schema)
-               for domain, schema in discover_schemas().items()}
+               for domain, schema in discover_schemas(domain_root).items()}
     hub.attach_kernel_table(LOGS_TABLE, LOGS_COLUMNS, LOGS_INDEXES)   # 内核日志表
     await hub.start()
     return hub, windows
@@ -132,15 +133,16 @@ async def _housekeeping_loop(bus: Bus, store, retention) -> None:
         await asyncio.sleep(retention.sweep_interval_h * 3600)
 
 
-async def self_test() -> None:
+async def self_test(domain_root: str | None = None) -> None:
     """声明自检:全域挂载 + 统计输出。契约有任何不合法此处即崩。
 
-    域无关——发现到几个域就自检几个(gcp-core 空总线=0 域,亦通过)。"""
-    bus, windows = await build_hub(fill_noop=True, journal_db="tmp/src_journal_selftest.db")
-    topics = sum(len(h.PUBLISHES) for h in discover_headers().values())
+    域无关——发现到几个域就自检几个(空总线=0 域,亦通过)。"""
+    bus, windows = await build_hub(fill_noop=True, journal_db="tmp/atelier_journal_selftest.db",
+                                   domain_root=domain_root)
+    topics = sum(len(h.PUBLISHES) for h in discover_headers(domain_root).values())
     logger.info("枢纽自检通过:%d 个域挂载,%d 个 topic,订阅消费任务已启动",
                 len(windows), topics, layer="CORE", component="HubSelfTest")
-    store, store_windows = await build_store()
+    store, store_windows = await build_store(domain_root=domain_root)
     logger.info("存储枢纽自检通过:%s", await store.snapshot(),
                 layer="CORE", component="HubSelfTest")
     await store.close()

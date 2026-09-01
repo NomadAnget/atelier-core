@@ -8,7 +8,7 @@ import 白名单豁免(与 main/supervisor 同列)。
 三类型:
   · local   —— 主进程内:build(主进程 ctx) → handlers 挂本地总线 + 起循环;
   · process —— 按需子进程:主进程搭网关转发 + lazy 子进程 + scheduler 起停;
-               子进程(`python -m src.boot.remote <域>`,本模块 run_domain_subprocess)
+               子进程(`python -m atelier_core.boot.remote <域> [域根]`,本模块 run_domain_subprocess)
                调**同一** build(BusClient ctx)真执行;
   · remote  —— 异地/外部实现:无 build.py,网关转发,公民资格外部自取。
 
@@ -25,10 +25,8 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, Awaitable, Callable
 
 from ..core import config, logger
-from ..core.registry import discover_headers, discover_schemas
+from ..core.registry import _ROOT as _DEFAULT_ROOT, discover_headers, discover_schemas
 from ..core.storage import StorageHub, StoreWindow
-
-_ROOT = __package__ or "src"
 
 Handler = Callable[[Any], Awaitable[None]]
 
@@ -62,27 +60,27 @@ class DomainRuntime:
     on_shutdown: Callable[[], Awaitable[None]] | None = None
 
 
-def load_build(domain: str) -> ModuleType | None:
-    """加载域的 build.py;无此文件=非 src 实现域(remote,外部实现)。"""
+def load_build(domain: str, root: str | None = None) -> ModuleType | None:
+    """加载域的 build.py;无此文件=非本域根实现域(remote,外部实现)。root=域根包。"""
     try:
-        return importlib.import_module(f"{_ROOT}.{domain}.build")
+        return importlib.import_module(f"{root or _DEFAULT_ROOT}.{domain}.build")
     except ModuleNotFoundError:
         return None
 
 
-def domain_kind(domain: str) -> str:
+def domain_kind(domain: str, root: str | None = None) -> str:
     """域类型:有 build.py 取其 KIND(local | process);无 build.py 默认 local
     (未迁移域仍在 main 手工接线)。**remote 不由此判**——那是部署事实,由
     config.gateway.remote_domains 显式声明(外部实现,无 src build.py),与本函数正交。"""
-    b = load_build(domain)
+    b = load_build(domain, root)
     return getattr(b, "KIND", "local") if b is not None else "local"
 
 
-def topic_schema_map() -> dict[str, Any]:
+def topic_schema_map(root: str | None = None) -> dict[str, Any]:
     """topic → 载荷契约(全域 PUBLISHES 汇总):子进程把 BusClient 收到的 dict
     还原成 Message 用。"""
     out: dict[str, Any] = {}
-    for hd in discover_headers().values():
+    for hd in discover_headers(root).values():
         out.update(hd.PUBLISHES)
     return out
 
@@ -97,13 +95,14 @@ def _adapt(handler: Handler, schema: Any) -> Callable[[dict, dict], Awaitable[No
     return h
 
 
-async def run_domain_subprocess(domain: str) -> None:
+async def run_domain_subprocess(domain: str, root: str | None = None) -> None:
     """process 域子进程宿主(`python -m src.boot.remote <域>`)——通用,不为任何域特化。
 
     组装 = 开存储枢纽(挂全 schema,DDL 幂等)→ BusClient 接网关 → 调域 build()
     (与主进程同一份)→ 绑 handler → 起循环/落种 → 常驻直至信号。日志走结构化
     中继(BusClient 自动),detach 控制台防与监督器文本泵重复。
     """
+    root = root or _DEFAULT_ROOT
     from ..core.gateway.client import BusClient
 
     cfg = config.load()
@@ -112,14 +111,14 @@ async def run_domain_subprocess(domain: str) -> None:
     import os
     os.environ.setdefault("GCP_MODELS_DIR", cfg.paths.models_dir)
 
-    build_mod = load_build(domain)
+    build_mod = load_build(domain, root)
     if build_mod is None or getattr(build_mod, "KIND", None) != "process":
         raise RuntimeError(f"'{domain}' 不是 process 域(无 build.py 或 KIND≠process)")
     if not cfg.gateway.enabled:
         raise RuntimeError("process 域子进程需要网关(config [gateway] enabled=true)")
 
     hub = StorageHub(cfg.paths.store_db)
-    stores = {d: hub.mount(s) for d, s in discover_schemas().items()}
+    stores = {d: hub.mount(s) for d, s in discover_schemas(root).items()}
     await hub.start()
 
     loop = asyncio.get_running_loop()
@@ -128,8 +127,8 @@ async def run_domain_subprocess(domain: str) -> None:
     ctx = BuildContext(hub=hub, stores=stores, publish=client, loop=loop, cfg=cfg)
     rt = build_mod.build(ctx)
 
-    header = importlib.import_module(f"{_ROOT}.{domain}.header")
-    schemas = topic_schema_map()
+    header = importlib.import_module(f"{root}.{domain}.header")
+    schemas = topic_schema_map(root)
     for topic, slot in header.SUBSCRIBES.items():
         h = rt.handlers.get(slot)
         if h is None:

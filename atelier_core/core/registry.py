@@ -89,26 +89,28 @@ def validate_header(
     return domain, publishes, subscribes, ephemeral, volatile
 
 
-def load_header(domain: str) -> ModuleType:
-    """按域名加载头文件模块。"""
-    return importlib.import_module(f"{_ROOT}.{domain}.header")
+def load_header(domain: str, root: str | None = None) -> ModuleType:
+    """按域名加载头文件模块(root=域根包,默认内核自身;变体传自己的包)。"""
+    return importlib.import_module(f"{root or _ROOT}.{domain}.header")
 
 
 RESERVED_DIRS = {"core", "boot", "services"}   # core=内核;services=远程域工作树宿主(部署事实,非域)
 
 
-def discover_headers() -> dict[str, ModuleType]:
-    """扫描 src/ 下全部域目录,加载并按目录名校验各头文件。
+def discover_headers(root: str | None = None) -> dict[str, ModuleType]:
+    """扫描域根包下全部域目录,加载并按目录名校验各头文件。
 
-    保留名(RESERVED_DIRS)不是域;其余子目录都必须有 header.py,缺了就抛错。
+    root=域根包(变体传自己的包,默认内核自身)。保留名(RESERVED_DIRS)不是域;
+    其余子目录都必须有 header.py,缺了就抛错。
     """
-    pkg = importlib.import_module(_ROOT)
+    root = root or _ROOT
+    pkg = importlib.import_module(root)
 
     headers: dict[str, ModuleType] = {}
     for info in pkgutil.iter_modules(pkg.__path__):
         if not info.ispkg or info.name in RESERVED_DIRS:
             continue
-        header = load_header(info.name)
+        header = load_header(info.name, root)
         validate_header(header, expected_domain=info.name)
         headers[info.name] = header
     return headers
@@ -220,23 +222,24 @@ def _validate_typed(domain: str, table: str, raw: dict) -> dict:
             "renamed_from": _validate_renamed_from(domain, table, raw)}
 
 
-def load_schema(domain: str) -> ModuleType:
-    """按域名加载存储声明模块(schema.py)。"""
-    return importlib.import_module(f"{_ROOT}.{domain}.schema")
+def load_schema(domain: str, root: str | None = None) -> ModuleType:
+    """按域名加载存储声明模块(schema.py;root=域根包,默认内核自身)。"""
+    return importlib.import_module(f"{root or _ROOT}.{domain}.schema")
 
 
-def discover_schemas() -> dict[str, ModuleType]:
-    """扫描全部域目录的 schema.py;没有该文件的域=不持久数据,合法跳过。"""
-    pkg = importlib.import_module(_ROOT)
+def discover_schemas(root: str | None = None) -> dict[str, ModuleType]:
+    """扫描域根包下全部域的 schema.py;没有该文件的域=不持久数据,合法跳过。"""
+    root = root or _ROOT
+    pkg = importlib.import_module(root)
 
     schemas: dict[str, ModuleType] = {}
     for info in pkgutil.iter_modules(pkg.__path__):
         if not info.ispkg or info.name in RESERVED_DIRS:
             continue
         try:
-            schema = load_schema(info.name)
+            schema = load_schema(info.name, root)
         except ModuleNotFoundError as exc:
-            if exc.name == f"{_ROOT}.{info.name}.schema":
+            if exc.name == f"{root}.{info.name}.schema":
                 continue   # 无存储声明,合法
             raise
         validate_schema(schema, expected_domain=info.name)

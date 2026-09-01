@@ -17,8 +17,8 @@ Atelier 是一套**编排众模型、批量产出媒体的基座**:一堆各有�
 ## 构成
 
 ```
-src/
-  main.py               根目录唯一文件——组装入口模板;最小 serve()(空总线可起 + --check),
+atelier_core/           # 包根(可被变体 uv add 后绝对导入 atelier_core.*)
+  main.py               组装入口模板;最小 serve()(空总线可起 + --check),
                         产品仓照它写自己的 <域>_handlers 接线(组装点唯一)
   core/                 内核(地基,RESERVED,不是域)
     core.py             消息总线内核——目录即路由、投递语义、闭环校验
@@ -35,21 +35,36 @@ src/
     assembly.py         装配原语(域无关):build_hub / build_store / housekeeping / 单实例锁 / self_test
     composition.py      按 KIND 装配(local / process / remote)
     supervisor.py       子进程监督器(拉起 / 看活 / 停机收编)
-    remote.py           process 域子进程入口(python -m src.boot.remote <域>)
+    remote.py           process 域子进程入口(python -m atelier_core.boot.remote <域> [域根])
 ```
 
 三层分明:`main.py`(产品接线)· `core/`(内核 + logger/config)· `boot/`(域无关装配层)。
 
-## 定位
+## 定位:通用依赖包,与变体解耦
 
-**底座,不是完整系统**:不含任何域(studio)。变体在 `src/` 下补自己的 studio 目录,注册表按"目录即路由"自动发现挂载(`core`/`boot`/`services` 是 RESERVED,不当域);无域即空总线。**装配原语在 `boot/`(随内核走);"装配哪些域"在各变体的 `main.py::serve()`(随产品走)——组装点唯一。** 域一律 `from …core import logger`。
+**底座,不是完整系统**:不含任何域(studio)。内核对"域住哪儿"一无所知——**发现/装配全部按 `domain_root` 参数走**,变体传自己的包,内核代码永不因变体而改。
+
+变体消费内核只需三件事(其余内核全包):
+
+| 变体特有的 | 怎么给内核 |
+|---|---|
+| 域住哪 | `build_hub(domain_root=__package__)`(模板已写死这句,自定位)|
+| 配置 | `config.load("自己的 config.toml")`(9 个基建节通用;功能配置走 settings 表)|
+| 引内核 / 引兄弟域 | 绝对 `from atelier_core.core import …` / 相对 `from ..域 import …` |
+
+发现按"目录即路由"扫**变体的包**(`core`/`boot`/`services` 是 RESERVED,不当域);无域即空总线。**装配原语在 `boot/`(随内核走);"装配哪些域"在各变体的 `main.py::serve()`(随产品走)——组装点唯一。**
 
 ## 依赖
 
 轻量,无重型推理栈:`pydantic` / `python-dotenv` / `websockets` / `uvicorn`。Python 3.11。
 
 ```bash
-uv sync
-uv run python -m src.main --check   # 声明自检(空总线=0 studio 亦通过)
-uv run python -m src.main           # 起空总线(单端口对外,默认 8000)
+# 本仓自检(空总线,域根=atelier_core 自身=0 域)
+uv run python -m atelier_core.main --check
+
+# 变体侧:装为依赖后
+uv add atelier-core            # 或从 Gitea 装/可编辑装
+# 变体 main.py:from atelier_core.boot.assembly import build_hub, build_store
+#              from atelier_core.core import logger
+#              DOMAIN_ROOT = __package__   # 内核据此扫本变体的域
 ```

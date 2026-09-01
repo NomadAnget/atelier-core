@@ -24,6 +24,9 @@ from .boot.assembly import (
     self_test,
 )
 
+# 域根 = 本包(变体拷此模板即自动指向自己的包;发现/装配据此扫域)
+DOMAIN_ROOT = __package__
+
 
 async def serve(config_path: str | None = None) -> None:
     """最小常驻:组装空/现有域 → 起 web(若域在)→ 等停止信号。产品仓按需扩写。"""
@@ -41,8 +44,8 @@ async def serve(config_path: str | None = None) -> None:
     bus, windows = await build_hub(
         fill_noop=True, journal_db=cfg.paths.journal_db,
         queue_size=cfg.bus.queue_size, max_attempts=cfg.bus.max_attempts,
-        put_timeout=cfg.bus.put_timeout)
-    store, _store_windows = await build_store(cfg.paths.store_db)
+        put_timeout=cfg.bus.put_timeout, domain_root=DOMAIN_ROOT)
+    store, _store_windows = await build_store(cfg.paths.store_db, domain_root=DOMAIN_ROOT)
     from .core.log_store import LogStoreHandler
     log_sink = LogStoreHandler(cfg.paths.store_db, batch=cfg.logstore.batch,
                                flush_interval=cfg.logstore.flush_interval,
@@ -92,4 +95,4 @@ if __name__ == "__main__":
                         help="只做声明自检后退出(CI/开发期契约验证)")
     parser.add_argument("--config", default=None, help="基建配置路径(默认 ./config.toml)")
     args = parser.parse_args()
-    asyncio.run(self_test() if args.check else serve(args.config))
+    asyncio.run(self_test(DOMAIN_ROOT) if args.check else serve(args.config))
