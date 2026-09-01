@@ -1,7 +1,7 @@
 [project]
-name = "gcp-core"
+name = "atelier-core"
 version = "0.1.0"
-description = "消息总线 + 存储枢纽 + 装配注册表 —— GCP 纯基础设施底座(零业务逻辑)"
+description = "Atelier 内核 —— 消息总线 + 存储枢纽 + 装配注册表;编排众模型批量产出媒体的基座(零业务逻辑)"
 requires-python = "==3.11.*"
 dependencies = [
     "pydantic==2.13.3",       # 总线载荷契约基类(core/contracts)
