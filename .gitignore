@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# 环境
+.venv/
+.worktrees/
+
+# 运行时数据
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm
+
+# 模型权重(体积大,按需本地下载)
+checkpoints/*
+
+# 密钥
+.env
+
+# 临时产物
+tmp/

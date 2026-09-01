@@ -1,0 +1,22 @@
+[project]
+name = "gcp-core"
+version = "0.1.0"
+description = "消息总线 + 存储枢纽 + 装配注册表 —— GCP 纯基础设施底座(零业务逻辑)"
+requires-python = "==3.11.*"
+dependencies = [
+    "pydantic==2.13.3",       # 总线载荷契约基类(core/contracts)
+    "python-dotenv==1.2.2",   # 组装入口可选 .env 加载(main)
+    "websockets==11.0.3",     # 网关:远程域 ws:// 桥(core/gateway)
+    "uvicorn==0.46.0",        # 组装入口 ASGI 伺服底座
+]
+
+# 这是"底座"——只含内核(core/)+ 组装层(main/composition/supervisor/config/logger/remote)。
+# 域(task/daemons/engines/web/...)不在此仓;由消费方按"目录即路由"在 src/ 下补域目录。
+# 空总线可 import、可起(无域即挂载 0 个域),供下游仓库作平台基座复用。
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

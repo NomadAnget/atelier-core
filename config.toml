@@ -1,0 +1,23 @@
+# gcp-core 基建配置(重启级)。所有段均有默认值,整份可留空;下列仅为常用项示例。
+# 运行时覆盖走 system_config 表(存储枢纽),启动级段只认本文件。
+
+[paths]
+journal_db = "data/hub/journal.db"   # 总线持久账本
+store_db   = "data/hub/store.db"      # 存储枢纽(含 hub_logs)
+models_dir = "checkpoints"           # 模型权重根目录(消费方带引擎域时用)
+
+[web]
+enabled = true
+host    = "0.0.0.0"
+port    = 8000
+
+[gateway]
+enabled        = false               # 需接远程域(ws://)时置 true
+host           = "127.0.0.1"
+port           = 8790
+remote_domains = []                  # 声明为"异地实现"的域,如 ["publishers"]
+
+# [logger] level="INFO"
+# [bus] queue_size=4096 / max_attempts=3 / put_timeout=30.0
+# [retention] journal_days=7 / logs_days=30 / sweep_interval_h=6
+# [[supervisor.children]] name="..." cmd=["..."] cwd="..." lazy=false
