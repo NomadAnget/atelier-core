@@ -5,22 +5,26 @@ name: 发布 atelier-core 到 PyPI registry
 on:
   push:
     branches: [master, main]
-    paths: ['pyproject.toml']
+    paths:
+      - pyproject.toml
+      - .forgejo/workflows/publish.yml   # 改工作流本身也重触发(幂等跳已发版本)
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     container:
-      image: python:3.11
+      image: node:lts          # 有 node(actions/checkout 是 node 动作);uv 自带 python 构建
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: 构建并发布(版本未发过才发)
         env:
-          TOKEN: ${{ secrets.Ateliers }}   # 含 repository + package(package 用于发包/查索引)
+          TOKEN: ${{ secrets.Ateliers }}   # 含 repository + package
         run: |
           set -euo pipefail
-          pip install -q uv
+          command -v curl >/dev/null || (apt-get update -qq && apt-get install -y -qq curl)
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
           VER=$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
           echo "本地版本:$VER"
           IDX="http://Carnation:${TOKEN}@debian.lan:3257/api/packages/Carnation/pypi/simple/atelier-core/"
