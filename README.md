@@ -14,6 +14,22 @@ Atelier 是一套**编排众模型、批量产出媒体的基座**:一堆各有�
 
 变体按**产出媒体品类**命名:`atelier-reel`(视频本地化/配音)、`atelier-press`(新闻日报)、`atelier-audio`、`atelier-frame`…… 各自持有自己的 `main.py` 域接线,共享本仓的内核与装配原语。
 
+## 文档(宪法)
+
+`docs/` 是 **Atelier 体系的宪法** —— 架构/契约/纪律的唯一真源(不止本仓,整个体系以它为准):
+
+| 篇 | 内容 |
+|---|---|
+| [docs/CONSTITUTION.md](docs/CONSTITUTION.md) | 纲领:铁律 + 认知隔离 + 三层结构 + 宪法同步律 |
+| [docs/architecture.md](docs/architecture.md) | 三层结构、目录即路由、domain_root、组装点、新增域清单 |
+| [docs/bus.md](docs/bus.md) | 消息总线:契约/闭环校验/投递语义/handler 契约/网关/执行交接 |
+| [docs/storage.md](docs/storage.md) | 存储枢纽:两种表、写权、无感自增量、设置基座 |
+| [docs/domains.md](docs/domains.md) | 域构建准则:三形态、文件结构、import 白名单、重推理闸 |
+| [docs/boot.md](docs/boot.md) | 组装层:build_hub/store、监督器、process 域(保留·默认未用) |
+| [docs/logging.md](docs/logging.md) | 日志三用法(分级 / 临时进度 / 结构化中继) |
+
+**宪法同步律**:契约/规则/纪律的变更,先改 `docs/` 对应篇再写代码。
+
 ## 构成
 
 ```
