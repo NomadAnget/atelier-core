@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any
 
 import websockets
@@ -47,6 +48,8 @@ class _RemoteDomain:
         self.conn = None
         self.connected = asyncio.Event()
         self.pending: dict[int, asyncio.Future] = {}
+        self.inflight = 0                 # 在飞投递数(懒进程域闲时回收判据)
+        self.last_active = 0.0            # 最近一次投递完成时刻(monotonic)
 
 
 class GatewayServer:
@@ -59,11 +62,22 @@ class GatewayServer:
         self._token = token
         self._ack_timeout = ack_timeout
         self._remotes: dict[str, _RemoteDomain] = {}
+        self._starters: dict[str, dict] = {}   # 懒进程域:{domain: {ensure, stop, idle_sec}}
         self._bus: Bus | None = None
         self._windows: dict[str, Window] = {}
         self._server = None
         self._seq = 0
+        self._idle_task: asyncio.Task | None = None
         self.port: int | None = None      # start() 后为实际监听口(支持 port=0 随机)
+
+    # ── 懒进程域:按需拉起 + 闲时回收(对需求方透明)────────────────────────────
+
+    def register_lazy(self, domain: str, *, ensure, stop, idle_sec: float = 30.0) -> None:
+        """把某(远程)域登记为**懒进程域**:投递到它而它未连接时,网关自动 `ensure`
+        拉起子进程(再等首连);连接着且无在飞投递空闲超过 idle_sec 时,自动 `stop` 回收。
+        对需求方完全透明(只管发消息)。ensure/stop 幂等(接监督器 ensure_child/stop_child)。"""
+        self._remotes.setdefault(domain, _RemoteDomain())
+        self._starters[domain] = {"ensure": ensure, "stop": stop, "idle_sec": float(idle_sec)}
 
     # ── 组装期:为远程域生成转发处理器(交给 bus.mount 绑定)────────────────────
 
@@ -82,11 +96,20 @@ class GatewayServer:
                 # 连上网关时首次投递照常等连接(冷启动窗口,仍是首投)。跨窗口陈旧
                 # 命令由收端执行前状态校验兜底(task 读 jobs 非 running 即弃)。
                 volatile = self._bus is not None and env.topic in self._bus.volatile_topics
+                # 懒进程域:未连接则按需拉起(幂等),再等首连——需求方无感
+                st = self._starters.get(domain)
+                if st is not None and not rd.connected.is_set():
+                    try:
+                        await st["ensure"]()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("懒进程域 %s 拉起失败:%s", domain, exc,
+                                       layer="CORE", component="Gateway")
                 await rd.connected.wait()
                 self._seq += 1
                 did = self._seq
                 fut: asyncio.Future = asyncio.get_running_loop().create_future()
                 rd.pending[did] = fut
+                rd.inflight += 1
                 try:
                     await rd.conn.send(json.dumps({
                         "t": "deliver", "did": did, "slot": slot, "topic": env.topic,
@@ -103,6 +126,8 @@ class GatewayServer:
                         f"远端 {domain} ack 超时({self._ack_timeout:.0f}s)slot={slot}")
                 finally:
                     rd.pending.pop(did, None)
+                    rd.inflight -= 1
+                    rd.last_active = time.monotonic()
                 if result is not True:                    # nack → 处理失败
                     raise RuntimeError(f"远端 {domain} nack:{result}")
                 return
@@ -118,11 +143,35 @@ class GatewayServer:
     async def start(self) -> None:
         self._server = await websockets.serve(self._on_conn, self._host, self._port)
         self.port = self._server.sockets[0].getsockname()[1]
-        logger.info("总线网关监听 ws://%s:%d(远程域:%s)", self._host, self.port,
+        if self._starters:
+            self._idle_task = asyncio.create_task(self._idle_reaper(), name="gateway_idle_reaper")
+        logger.info("总线网关监听 ws://%s:%d(远程域:%s;懒进程域:%s)", self._host, self.port,
                     ",".join(sorted(self._remotes)) or "无",
+                    ",".join(sorted(self._starters)) or "无",
                     layer="CORE", component="Gateway")
 
+    async def _idle_reaper(self) -> None:
+        """闲时回收:懒进程域连接着、无在飞投递、空闲超过 idle_sec → stop_child 回收子进程。"""
+        while True:
+            await asyncio.sleep(5.0)
+            now = time.monotonic()
+            for domain, st in list(self._starters.items()):
+                rd = self._remotes.get(domain)
+                if rd is None or not rd.connected.is_set() or rd.inflight > 0:
+                    continue
+                if rd.last_active and now - rd.last_active >= st["idle_sec"]:
+                    try:
+                        await st["stop"]()
+                        logger.info("懒进程域 %s 闲置 %.0fs,回收子进程", domain, st["idle_sec"],
+                                    layer="CORE", component="Gateway")
+                        rd.last_active = 0.0   # 停过就不再重复 stop,直到下次投递刷新
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("懒进程域 %s 回收失败:%s", domain, exc,
+                                       layer="CORE", component="Gateway")
+
     async def stop(self) -> None:
+        if self._idle_task is not None:
+            self._idle_task.cancel()
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
