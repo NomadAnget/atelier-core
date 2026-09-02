@@ -1,0 +1,33 @@
+name: 发布 atelier-core 到 PyPI registry
+
+# 版本/依赖变更(pyproject.toml)push 到 master 即自动构建 + 发布到 Forgejo PyPI。
+# 幂等:版本已发过则跳过(必须先 bump version 才会发新版)。走 LAN(debian.lan)绕 WAF。
+on:
+  push:
+    branches: [master, main]
+    paths: ['pyproject.toml']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.11
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: 构建并发布(版本未发过才发)
+        env:
+          TOKEN: ${{ secrets.Ateliers }}   # 含 repository + package(package 用于发包/查索引)
+        run: |
+          set -euo pipefail
+          pip install -q uv
+          VER=$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "本地版本:$VER"
+          IDX="http://Carnation:${TOKEN}@debian.lan:3257/api/packages/Carnation/pypi/simple/atelier-core/"
+          if curl -sf "$IDX" 2>/dev/null | grep -qE "atelier_core-${VER}[.-]"; then
+            echo "版本 $VER 已在 registry,跳过发布"; exit 0
+          fi
+          uv build
+          uv publish --publish-url http://debian.lan:3257/api/packages/Carnation/pypi \
+            --username Carnation --password "$TOKEN" dist/atelier_core-*
+          echo "✅ 已发布 atelier-core $VER"
