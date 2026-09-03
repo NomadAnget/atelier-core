@@ -21,7 +21,7 @@
 - `topic_schema_map(root)`:topic→schema 映射(网关远程域绑定用)。
 - `run_domain_subprocess(d, root)`:process 域子进程通用宿主(不为任何域特化):开存储枢纽(挂全部
   schema,DDL 幂等)→ 调**同一** `build(ctx)`(bus 句柄换 BusClient)→ 绑 handler → BusClient 接网关领
-  订阅槽 → 常驻直至信号。**当前无 process 域**(见 [domains.md](domains.md)),机制保留待用。
+  订阅槽 → 常驻直至信号。在用 process 域:**publishers**(见 [domains.md](domains.md) 与下文两种生命周期形态)。
 - `BuildContext` / `DomainRuntime`:域 `build.py` 与基础设施对接的装配契约类型(域只碰这两个)。
 
 ## 子进程监督器(boot/supervisor.py)
@@ -47,19 +47,40 @@ name/cmd 必填):
 (启动命令是部署事实)。process 域启动命令是框架已知的 `python -m atelier_core.boot.remote <域> [域根]`,
 组装点发现即自动注册为 lazy 子进程。**加一个 process 域只写它的 build.py,config 零改动。**
 
-## process 域的完整语义(保留能力,当前未用)
+## process 域的完整语义
 
 **任何域**只需 `build.py` 声明 `KIND="process"` + `PROCESS={"lazy": True}`,执行即搬进按需子进程:进程退出
 = OS 彻底回收(CUDA 上下文/显存碎片/原生堆全清)+ 故障隔离。**契约与调用方零改动**——同一 `build(ctx)`
 在主进程或子进程复用,改形态只动 `KIND` 一行。
 
-- **起停归"需求方"**(哨兵不起停;进程不自作主张退出):需求方派发前 `ensure_child` 懒起,不再需要即
-  `stop_child` 优雅回收。防"自退瞬间恰有新投递在途"的竞态。
-- **崩溃语义**:意外退出触发 `set_exit_listener` → 需求方收拾(在跑任务置 failed + 放行串行队列);配合网关
-  "VOLATILE 在途断线放弃" + 收端执行前状态校验(双保险),旧命令不会在新进程复活僵尸执行。
+共性(两种形态都成立):
 - **registry 双注册**:主进程也调一次 build(填 registry 元数据供 web 建表单 + local 回退);process 模式下
   这份 handler 挂而不用(被网关转发覆盖);子进程注册后真正执行。
-- **心跳不 enroll**:按需短命进程,卡死由需求方既有规则(job_stalled)覆盖。
+- **崩溃语义**:意外退出触发 `set_exit_listener` → 收拾残局(在跑任务置 failed + 放行队列);配合网关
+  "VOLATILE 在途断线放弃" + 收端执行前状态校验(双保险),旧命令不会在新进程复活僵尸执行。
+- **handler 轻量律照旧**:子进程里 handler 仍毫秒返回、`create_task` 交 worker(见 [bus.md](bus.md))——
+  阻塞子进程事件循环会卡死它自己的其它投递(取消信号/并发请求/心跳)。
 
-> 为何回落 local:重推理已在**引擎层**做单次推理级子进程隔离(GPU 回收+崩溃隔离),整域再进程化=重复;
-> 且懒下线拖累域内常驻轻量 handler 的即时性。详见 [domains.md](domains.md)。
+生命周期分**两种形态**,按"谁触发这个域"选:
+
+**形态 A — 单一需求方起停**(旧 task 域的模型):存在唯一需求方,以"命令→await finished 期物"
+串行派发(见 [bus.md](bus.md) 执行交接)。它派发前 `ensure_child` 懒起、收到 finished 后 `stop_child`
+优雅回收(防"自退瞬间恰有新投递在途"的竞态)。**心跳不 enroll**——卡死由需求方既有规则(job_stalled)覆盖。
+
+**形态 B — 网关自动拉起(多需求方 fire-and-forget)**:被**多个域**经 fire-and-forget 消息触发、
+无单一需求方握生命周期时(如 publishers:scheduler 发布 / web 登录 / daemons 保活三方触发),生命周期
+交给**网关**(`GatewayServer.register_lazy(域, ensure=, stop=, idle_sec=)`,`ensure`/`stop` 委托监督器):
+- **按投递自动拉起**:网关 forward 命中未连接的懒域 → 先 `ensure` 懒起、等首连、再投。
+- **活性 = 上行流量/心跳,不是执行时长**:子进程**有活跃任务时**发心跳公约(`<域>/health/heartbeat`,
+  EPHEMERAL);网关收到子进程的任何上行(心跳/publish/log)即刷新活性时刻。**无在飞投递 且 活性静默
+  超过 `idle_sec`** 才 `stop` 回收——正在跑(登录 holding/发布上传,远超 ack_timeout)的子进程靠心跳续命,
+  不被误杀;真正空闲才回收。
+- **哨兵白捡**:该心跳被哨兵自动登记 → 子进程崩溃/卡死(心跳停)既被网关回收、又被 `heartbeat_silence`
+  告警(studio 有哨兵则得,无则仅回收)。这是把心跳公约**扩展**到"无需求方兜底"的形态(形态 A 有
+  需求方 job_stalled,故不需心跳)。
+- **记账仍走执行交接**:长任务完成经独立 finished(VOLATILE)回触发方记账(publishers/publish/finished
+  → scheduler),与形态 A 的 finished 期物同源;网关拉起/回收只管**进程在不在**,不管**任务成没成**。
+
+> 何时整域进程化:纯 Python 重活、无引擎级子进程可依赖,又要完美资源回收+故障隔离时。重推理已在
+> **引擎层**做单次推理级子进程隔离(见 [domains.md](domains.md)),故引擎重活的域无需整域进程化。
+> 首个在用 process 域 = **publishers**(形态 B);task 域曾用形态 A,2026-08-30 回落 local(引擎层隔离已覆盖)。

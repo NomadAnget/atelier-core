@@ -8,7 +8,7 @@
 | 类型 KIND | 实现在哪 | 基础设施怎么装 | 何时用 |
 |---|---|---|---|
 | **local**(默认) | 主进程内 | 调域 `build(ctx)` 得 handlers/loops → `bus.mount` + 起循环 | 绝大多数域 |
-| **process** | 按需子进程 | 主进程:网关转发 + lazy 子进程 + 起停控制;子进程(`python -m atelier_core.boot.remote <域> [域根]`)调**同一** `build(ctx)`(bus 句柄换 BusClient) | 需整域出进程做完美资源回收+故障隔离(纯 Python 重活、无引擎级子进程可依赖时)。**当前无 process 域**——见下 |
+| **process** | 按需子进程 | 主进程:网关转发 + lazy 子进程 + 起停控制;子进程(`python -m atelier_core.boot.remote <域> [域根]`)调**同一** `build(ctx)`(bus 句柄换 BusClient) | 需整域出进程做完美资源回收+故障隔离(纯 Python 重活、无引擎级子进程可依赖时)。在用:**publishers**;生命周期两形态见 [boot.md](boot.md) |
 | **remote** | 独立进程/异地/别语言 | 网关转发(域无 `build.py`,`cfg.gateway.remote_domains` 声明);公民资格由外部实现自取 | 异地/外部实现(发布引擎) |
 
 `build.py` 声明面(local/process 必备;remote 无):
@@ -25,11 +25,12 @@ def build(ctx: BuildContext) -> DomainRuntime:
 
 **同一 `build` 三形态复用**:从 local 改 process 只改 `KIND` 一行,构造代码零改动。
 
-> **process 域现状**:task 域曾是唯一 process 域,**2026-08-30 回落 local**。原因:①重推理引擎默认
-> 已**单次推理级子进程隔离**(`SUBPROCESS_INFER`,见下),GPU 回收+崩溃隔离在**引擎层**已具备,整域
-> 再进程化=重复隔离;②process 域**懒下线**会使域内常驻轻量职责(名词对照/知识库 handler)在域休眠时
-> 无法即时响应。**本能力完整保留**(`boot/composition.py` + `boot/remote.py` + 监督器懒起),供将来确有
-> "整域需出进程"需求的域使用。
+> **process 域现状**:在用 process 域 = **publishers**(纯 Python 浏览器重活,整域出进程做完美资源
+> 回收+故障隔离;生命周期用 [boot.md](boot.md) 形态 B——网关自动拉起、心跳续命、闲时回收)。
+> task 域曾用形态 A,**2026-08-30 回落 local**:①重推理引擎默认已**单次推理级子进程隔离**
+> (`SUBPROCESS_INFER`,见下),GPU 回收+崩溃隔离在**引擎层**已具备,整域再进程化=重复隔离;
+> ②形态 A 的**懒下线**会使域内常驻轻量职责(名词对照/知识库 handler)在域休眠时无法即时响应。
+> 判据:域是否**只做按需重活**(是→process 划算)还是**兼有常驻轻量 handler**(是→留 local)。
 
 ## 域的标准文件结构
 
