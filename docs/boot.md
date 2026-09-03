@@ -71,13 +71,14 @@ name/cmd 必填):
 无单一需求方握生命周期时(如 publishers:scheduler 发布 / web 登录 / daemons 保活三方触发),生命周期
 交给**网关**(`GatewayServer.register_lazy(域, ensure=, stop=, idle_sec=)`,`ensure`/`stop` 委托监督器):
 - **按投递自动拉起**:网关 forward 命中未连接的懒域 → 先 `ensure` 懒起、等首连、再投。
-- **活性 = 上行流量/心跳,不是执行时长**:子进程**有活跃任务时**发心跳公约(`<域>/health/heartbeat`,
-  EPHEMERAL);网关收到子进程的任何上行(心跳/publish/log)即刷新活性时刻。**无在飞投递 且 活性静默
-  超过 `idle_sec`** 才 `stop` 回收——正在跑(登录 holding/发布上传,远超 ack_timeout)的子进程靠心跳续命,
-  不被误杀;真正空闲才回收。
-- **哨兵白捡**:该心跳被哨兵自动登记 → 子进程崩溃/卡死(心跳停)既被网关回收、又被 `heartbeat_silence`
-  告警(studio 有哨兵则得,无则仅回收)。这是把心跳公约**扩展**到"无需求方兜底"的形态(形态 A 有
-  需求方 job_stalled,故不需心跳)。
+- **活性 = 上行流量,不是执行时长**:网关收到子进程的**任何上行(publish/log/ack)即刷新活性时刻**;
+  **无在飞投递 且 活性静默超过 `idle_sec`** 才 `stop` 回收——正在跑(登录 holding/发布上传,远超
+  ack_timeout)的子进程靠持续上行(进度 publish + 结构化日志)续命,不被误杀;真正空闲才回收。
+  子进程**有活跃任务时周期打一条 liveness 日志**兜底"浏览器长静默步无上行"的间隙(日志也是上行)。
+- **不发心跳公约、哨兵不 enroll**:进程域**短命**(闲时被优雅回收),**绝不发 `<域>/health/heartbeat`**——
+  那是给常驻循环的活性承诺、哨兵 auto-enroll 当常驻源;进程域发了会让哨兵把"正常闲时回收"误报
+  `heartbeat_silence` critical。**崩溃检测走 `set_exit_listener`**(需求方/监督器收拾:在跑任务置
+  failed),与形态 A 同源,不靠心跳。
 - **记账仍走执行交接**:长任务完成经独立 finished(VOLATILE)回触发方记账(publishers/publish/finished
   → scheduler),与形态 A 的 finished 期物同源;网关拉起/回收只管**进程在不在**,不管**任务成没成**。
 

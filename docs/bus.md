@@ -106,9 +106,11 @@ topic,哨兵 auto-enroll。安全:默认只绑 127.0.0.1,token 鉴权,每域单�
 **网关托管 process 域生命周期(形态 B,见 [boot.md](boot.md))**:同一网关既转发 remote 域(外部常驻
 实现),也可**按需拉起/回收** process 域子进程——用于被多需求方 fire-and-forget 触发、无单一需求方握
 生命周期的 process 域。`register_lazy(域, ensure=, stop=, idle_sec=)`:forward 命中未连接的懒域先
-`ensure` 懒起再投;**活性判据 = 子进程上行流量(心跳/publish/log),不是执行时长**——子进程有活跃任务时
-发心跳公约续命,**无在飞投递且活性静默超 `idle_sec`** 才 `stop` 回收(正在跑的登录/发布远超 ack_timeout
-也不误杀)。`ensure`/`stop` 委托监督器懒起子进程,网关只判"该不该在、还活着没"。
+`ensure` 懒起再投;**活性判据 = 子进程上行流量(publish/log/ack),不是执行时长**——正在跑的登录/发布
+靠持续上行(进度 + 结构化日志 + 活跃时周期 liveness 日志)续命,**无在飞投递且活性静默超 `idle_sec`**
+才 `stop` 回收(远超 ack_timeout 也不误杀)。`ensure`/`stop` 委托监督器,网关只判"该不该在、还活着没"。
+进程域**短命,不发心跳公约**(否则哨兵 auto-enroll 后会把正常回收误报 heartbeat_silence);崩溃走
+`set_exit_listener`。
 
 **发布语义铁律**(publishers,现为 process 域):业务失败(平台拒稿/超时)= `finished(ok=False)` 并 ack,
 绝不 nack(重试即重复投稿事故);只有载荷缺 packet 才 nack 进死信。
