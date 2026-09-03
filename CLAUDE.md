@@ -32,9 +32,16 @@
 ## 命令
 
 ```bash
-uv run python -m atelier_core.main --check     # 本仓自检(空总线,0 域)
-uv build                                        # 构建 wheel/sdist
+uv run python -m atelier_core.main --check              # 本仓自检(空总线,0 域)
+uv run python -m unittest discover -s tests -p 'test_*.py'  # 内核测试套件
+uv build                                                # 构建 wheel/sdist
 ```
+
+**测试套件 `tests/`**(自旧 `Carnation/Architecture@hub` 抽取内核时迁入):内核数据面全覆盖——
+总线持久/重投/死信(bus_durability)、网关 forward/ack/重连/鉴权/**懒进程域**(gateway)、存储枢纽
+信封表/类型化表/写权/无感自增量(store_prototype/typed_store)、config(hub_config)。**改内核先跑它防回归**。
+重域依赖的集成测试(bus_prototype/settings_store/supervisor 用真域当 fixture)+ log-store/housekeeping
+e2e 待造假域/适配组装根后补(暂 skip;域级测试归各 `atelier-<域>/tests/`)。
 
 ## 发版(变体按版本约束消费,不再钉 commit)
 
