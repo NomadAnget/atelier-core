@@ -38,9 +38,11 @@ uv build                                        # 构建 wheel/sdist
 
 ## 发版(变体按版本约束消费,不再钉 commit)
 
-内核以 **Forgejo PyPI 包**分发。改动后:bump `pyproject.toml` 版本 → `uv build` →
-`uv publish --publish-url http://debian.lan:3257/api/packages/Carnation/pypi ...`
-→ 变体 `uv sync` 按 `atelier-core>=x.y` 自动升。
+内核以 **Forgejo PyPI 包**分发,**自动发版**:改动后只需 **bump `pyproject.toml` 版本 → push master**
+→ `.forgejo/workflows/publish.yml` 自动 `uv build` + `uv publish` 到 Forgejo PyPI(幂等:版本已发过则跳过,
+所以**必须先 bump version** 才会发新版;走 LAN debian.lan 绕 WAF;认证=用户级 secret `Ateliers`,含 package 权)。
+→ 变体 `uv sync` 按 `atelier-core>=x.y` 自动升。**不要手动 `uv publish`**——bump+push 即可。
+(应急手动:`uv build && uv publish --publish-url http://debian.lan:3257/api/packages/Carnation/pypi -u Carnation -p <package-token>`)
 
 **禁止**未经用户明确确认改依赖钉版策略。临时产物写项目 `tmp/`,不用系统 `/tmp`。
 提交信息末尾:`Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`;用户未主动要求不自动 commit。
