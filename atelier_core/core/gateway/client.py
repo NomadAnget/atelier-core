@@ -77,6 +77,17 @@ class BusClient:
         except Exception:  # noqa: BLE001 — 断线/背压:丢弃这条,不影响业务
             pass
 
+    async def send_busy(self) -> None:
+        """传输层"忙"帧:进程域有活跃后台工作时周期发,供网关闲时回收决策(见 boot.md 形态 B)。
+        单向、无 ack、未连即丢——不是日志、不是业务 topic,不进哨兵。"""
+        ws = self._ws
+        if ws is None:
+            return
+        try:
+            await ws.send(json.dumps({"t": "busy"}))
+        except Exception:  # noqa: BLE001
+            pass
+
     async def close(self) -> None:
         self._log_stop.set()
         if self._log_relay is not None:

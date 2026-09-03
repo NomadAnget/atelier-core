@@ -71,14 +71,18 @@ name/cmd 必填):
 无单一需求方握生命周期时(如 publishers:scheduler 发布 / web 登录 / daemons 保活三方触发),生命周期
 交给**网关**(`GatewayServer.register_lazy(域, ensure=, stop=, idle_sec=)`,`ensure`/`stop` 委托监督器):
 - **按投递自动拉起**:网关 forward 命中未连接的懒域 → 先 `ensure` 懒起、等首连、再投。
-- **活性 = 上行流量,不是执行时长**:网关收到子进程的**任何上行(publish/log/ack)即刷新活性时刻**;
-  **无在飞投递 且 活性静默超过 `idle_sec`** 才 `stop` 回收——正在跑(登录 holding/发布上传,远超
-  ack_timeout)的子进程靠持续上行(进度 publish + 结构化日志)续命,不被误杀;真正空闲才回收。
-  子进程**有活跃任务时周期打一条 liveness 日志**兜底"浏览器长静默步无上行"的间隙(日志也是上行)。
-- **不发心跳公约、哨兵不 enroll**:进程域**短命**(闲时被优雅回收),**绝不发 `<域>/health/heartbeat`**——
-  那是给常驻循环的活性承诺、哨兵 auto-enroll 当常驻源;进程域发了会让哨兵把"正常闲时回收"误报
-  `heartbeat_silence` critical。**崩溃检测走 `set_exit_listener`**(需求方/监督器收拾:在跑任务置
-  failed),与形态 A 同源,不靠心跳。
+- **回收活性 = 传输层 busy 帧,不是执行时长、不是日志**:handler fire-and-forget 后 inflight 归零,
+  但后台活还在跑——子进程宿主据域的 `busy()` 钩子(DomainRuntime.busy,有活跃工作返回 True)**周期给
+  网关发 `t:"busy"` 传输帧**;网关收到 busy(或业务 publish/ack)刷 `last_active`,**日志 `t:"log"`
+  不计活性**(liveness 不搭日志)。**无在飞投递 且 活性静默超 `idle_sec`** 才 `stop` 回收——正在跑
+  (登录 holding/发布长静默步)的子进程靠 busy 帧续命,真正空闲才回收。busy 帧是**网关↔子进程的传输
+  信号**(作用域=网关),不是业务 topic、不进哨兵、不上账本。
+- **进程死活不靠心跳、哨兵不 enroll 进程域**:进程域**短命**(闲时被优雅回收),**不发 `<域>/health/heartbeat`**
+  ——那是给**真常驻循环**的活性承诺(哨兵 auto-enroll、沉默=死);进程域发了会让哨兵把"正常闲时回收"
+  误报 `heartbeat_silence`。进程域的死活由**掌握其存在性的权威**判定,分两条:①**崩溃/退出**——网关
+  ws 断连 / 监督器 `set_exit_listener` 直接感知(需求方收拾:在跑任务置 failed),不需心跳;②**卡死**
+  (连着但活不推进)——由**需求方**的执行交接超时判(如 scheduler 发 publish/requested 后久等无
+  finished = job_stalled)。哨兵只作这些权威的告警消费端,不自己盯进程域。
 - **记账仍走执行交接**:长任务完成经独立 finished(VOLATILE)回触发方记账(publishers/publish/finished
   → scheduler),与形态 A 的 finished 期物同源;网关拉起/回收只管**进程在不在**,不管**任务成没成**。
 

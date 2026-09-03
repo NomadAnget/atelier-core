@@ -26,6 +26,8 @@ from typing import Any, Awaitable, Callable
 
 from ..core import config, logger
 from ..core.registry import _ROOT as _DEFAULT_ROOT, discover_headers, discover_schemas
+
+_BUSY_TICK_SEC = 10.0    # 进程域忙帧间隔(须 < 网关 register_lazy 的 idle_sec,活跃时持续刷 last_active)
 from ..core.storage import StorageHub, StoreWindow
 
 Handler = Callable[[Any], Awaitable[None]]
@@ -58,6 +60,10 @@ class DomainRuntime:
     loops: list[Awaitable] = field(default_factory=list)   # 背景协程(create_task)
     on_seed: Callable[[], Awaitable[None]] | None = None    # 启动落种(seed/get)
     on_shutdown: Callable[[], Awaitable[None]] | None = None
+    # 进程域"是否在忙"钩子(有活跃后台工作时返回 True)。仅子进程内被宿主轮询:忙则周期给网关
+    # 发传输层 busy 帧(供网关闲时回收决策——handler fire-and-forget 后 inflight 归零,靠此续命)。
+    # 这是**网关↔子进程的传输信号**,不是日志、不是业务 topic、不进哨兵(见 docs boot.md 形态 B)。
+    busy: Callable[[], bool] | None = None
 
 
 def load_build(domain: str, root: str | None = None) -> ModuleType | None:
@@ -139,6 +145,21 @@ async def run_domain_subprocess(domain: str, root: str | None = None) -> None:
         await rt.on_seed()
     tasks = [asyncio.create_task(c) for c in rt.loops]
     await client.start()
+
+    # 忙帧循环:域有活跃后台工作时,周期给网关发传输层 busy 帧,让网关别在活干到一半时
+    # (fire-and-forget handler 已 ack、inflight 归零)误回收本子进程。空闲即停发 → 网关闲时回收。
+    if rt.busy is not None:
+        async def _busy_ticker() -> None:
+            while True:
+                try:
+                    if rt.busy():
+                        await client.send_busy()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001
+                    pass
+                await asyncio.sleep(_BUSY_TICK_SEC)
+        tasks.append(asyncio.create_task(_busy_ticker(), name=f"{domain}_busy_ticker"))
     logger.info("%s 执行进程就绪 pid=%d(网关 ws://%s:%d)", domain, os.getpid(),
                 cfg.gateway.host, cfg.gateway.port, layer=domain.upper(),
                 component=f"{domain}Worker")

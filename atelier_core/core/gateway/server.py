@@ -204,10 +204,13 @@ class GatewayServer:
             async for raw in ws:
                 m = json.loads(raw)
                 t = m.get("t")
-                # 子进程任何上行(ack/nack/publish/log/心跳)= 活性信号:刷新闲时判据。
-                # 懒进程域回收看的是"活性静默"而非"执行时长"——正在跑的登录/发布靠持续
-                # 上行(心跳公约 + 进度 publish/log)续命,不被 idle_reaper 误杀。
-                rd.last_active = time.monotonic()
+                # 活性信号 = 除 log 外的一切上行(ack/nack/publish/busy)。**日志不计活性**
+                # (纯观测,liveness 不该搭日志);正在跑的进程域靠传输层 busy 帧 + 业务 publish
+                # 续命,不被 idle_reaper 误杀。见 docs boot.md 形态 B。
+                if t != "log":
+                    rd.last_active = time.monotonic()
+                if t == "busy":                        # 传输层保活帧:仅刷 last_active(上面已做)
+                    continue
                 if t == "ack":
                     fut = rd.pending.get(int(m["did"]))
                     if fut is not None and not fut.done():
