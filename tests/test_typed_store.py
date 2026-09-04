@@ -147,7 +147,6 @@ class TypedStoreTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(StoreError):                   # 不安全 → 人工迁移
             await hub3.start()
 
-    @unittest.skip("待适配 atelier-core 组装根:log-store/housekeeping e2e——后续修正")
 
     async def test_kernel_logs_end_to_end(self):
         """logger → LogStoreHandler(写线程)→ hub_logs 内核表可查。"""
@@ -159,7 +158,7 @@ class TypedStoreTests(unittest.IsolatedAsyncioTestCase):
         hub.attach_kernel_table(LOGS_TABLE, LOGS_COLUMNS, LOGS_INDEXES)
         await hub.start()
         sink = LogStoreHandler(path, flush_interval=0.05)
-        logging.getLogger("src").addHandler(sink)
+        logging.getLogger(logger.ROOT).addHandler(sink)
         try:
             logger.info("入库测试:第 %d 条", 1, layer="CORE", component="TypedTest")
             logger.error("入库测试:错误样本", layer="SENTINEL", component="TypedTest")
@@ -179,7 +178,7 @@ class TypedStoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(snap[LOGS_TABLE]["owner"], "kernel")
             self.assertEqual(snap[LOGS_TABLE]["type"], "typed")
         finally:
-            logging.getLogger("src").removeHandler(sink)
+            logging.getLogger(logger.ROOT).removeHandler(sink)
             sink.close()
             await hub.close()
 
@@ -209,7 +208,6 @@ class TypedStoreTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HousekeepingTests(unittest.IsolatedAsyncioTestCase):
-    @unittest.skip("待适配 atelier-core 组装根:log-store/housekeeping e2e——后续修正")
     async def test_kernel_purge_guard_and_sweep(self):
         """kernel_purge 只对内核表放行;内务一轮清理过期日志与全销账消息。"""
         from atelier_core.core.log_store import LOGS_COLUMNS, LOGS_INDEXES, LOGS_TABLE
