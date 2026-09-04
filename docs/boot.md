@@ -8,6 +8,7 @@
 |---|---|
 | `build_hub(remote_handlers, *, domain_root, journal_db, queue_size, ...)` | 发现域 header → 建总线 → mount 各域 handler → 闭环校验 → 返回 `(bus, windows)`;`fill_noop=True` 占位漏接槽(见 [bus.md](bus.md)) |
 | `build_store(store_db, *, domain_root)` | 发现域 schema → 建/对齐表 → 返回 `(store, store_windows)`(每域一个写窗口) |
+| `build_supervisor_and_gateway(cfg, handlers_by_domain, domain_root)` | **通用进程域/网关装配(零域绑定、发现驱动)**:发现 KIND=process 域 → 登记懒子进程进监督器 + 建网关(启用且有转发域时)+ 注入转发 handler + `register_lazy`。返回 `(supervisor, gateway)`。组装点调一次即可,**加 process 域无需改此处/config**(形态 B) |
 | `self_test(domain_root)` | `--check`:发现+挂载+存储自检后退出(不起服务),报"N 域挂载 / M topic 闭环 / K 表" |
 | `_housekeeping_loop(bus, store, retention)` | 内务循环:死信/账本/日志按 `[retention]` 回收 |
 | `_acquire_single_instance_lock(store_db)` | 单实例锁:防两个 hub 抢同一数据目录 |

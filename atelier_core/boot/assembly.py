@@ -26,6 +26,45 @@ from ..core.storage import StorageHub, StoreWindow
 Handlers = dict[str, Callable[[Envelope], Awaitable[None]]]
 
 
+def build_supervisor_and_gateway(cfg, handlers_by_domain: dict, domain_root: str):
+    """通用进程域/网关装配(零域绑定、发现驱动)——组装点 serve() 调一次即可:
+
+    - 发现 KIND=process 的域(`build.py`),为每个登记**懒子进程**(`python -m atelier_core.boot.remote
+      <域> <根>`)进监督器(与 cfg 里的哑边车并列);
+    - 若网关启用且有转发域(remote_domains + 进程域),建网关、把这些域的**转发 handler** 注入
+      `handlers_by_domain`(原地更新)、对进程域 `register_lazy`(按需拉起 + 闲时回收,idle_sec 见 cfg);
+    - 返回 `(supervisor, gateway)`;网关需组装点在 `build_hub` 后 `attach(bus,windows)+start()`。
+
+    加一个 process 域只写它的 build.py,**此处与 config 零改动**——正是 boot.md 形态 B 的承诺。"""
+    import sys
+    from .composition import domain_kind
+    from .supervisor import Supervisor
+    from ..core.gateway.server import GatewayServer
+    from ..core.registry import load_header
+
+    proc = [d for d in discover_headers(domain_root)
+            if domain_kind(d, domain_root) == "process"]
+    children = list(cfg.supervisor.children) + [
+        {"name": f"{d}-worker",
+         "cmd": [sys.executable, "-m", "atelier_core.boot.remote", d, domain_root],
+         "lazy": True} for d in proc]
+    supervisor = Supervisor(children)
+
+    gateway = None
+    forward = list(dict.fromkeys(list(cfg.gateway.remote_domains) + proc))
+    if cfg.gateway.enabled and forward:
+        gateway = GatewayServer(host=cfg.gateway.host, port=cfg.gateway.port,
+                                token=cfg.gateway.token, ack_timeout=cfg.gateway.ack_timeout)
+        handlers_by_domain.update(
+            {d: gateway.remote_handlers(load_header(d, domain_root)) for d in forward})
+        for d in proc:
+            gateway.register_lazy(
+                d, ensure=lambda d=d: supervisor.ensure_child(f"{d}-worker"),
+                stop=lambda d=d: supervisor.stop_child(f"{d}-worker"),
+                idle_sec=cfg.gateway.idle_sec)
+    return supervisor, gateway
+
+
 def _acquire_single_instance_lock(store_db: str):
     """单实例守卫:对数据目录抢独占文件锁,抢不到=已有 hub 在跑,拒绝启动。
 

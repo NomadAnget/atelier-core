@@ -84,6 +84,7 @@ class GatewayCfg:
     token: str = ""                  # 非空则远端 hello 必须携带
     ack_timeout: float = 600.0       # 远端处理一条投递的最长时限(如过风控可达分钟级)
     remote_domains: tuple = ()       # 声明为"异地实现"的域(如 "publishers")
+    idle_sec: float = 30.0           # 懒进程域闲时回收阈值(无在飞投递且活性静默超此秒数即回收)
 
 
 @dataclass(frozen=True)
