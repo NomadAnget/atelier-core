@@ -93,6 +93,8 @@ class WebCfg:
     host: str = "0.0.0.0"
     port: int = 8000
     dist_dir: str = ""     # 前端构建产物目录(变体各自 in-repo 前端);留空=回落 web 域内 frontend/dist
+    hide_pages: tuple = () # 前端排除页 id:域挂着但该变体不想显的页(如 dormant 域);
+                           #   空=不排除。前端按后端能力自动显隐 + 此表强制隐藏(见前端 usePages)。
 
 
 @dataclass(frozen=True)

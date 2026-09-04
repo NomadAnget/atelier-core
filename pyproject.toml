@@ -1,6 +1,6 @@
 [project]
 name = "atelier-core"
-version = "0.2.3"
+version = "0.2.4"
 description = "Atelier 内核 —— 消息总线 + 存储枢纽 + 装配注册表;编排众模型批量产出媒体的基座(零业务逻辑)"
 requires-python = "==3.11.*"
 dependencies = [
