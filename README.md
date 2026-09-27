@@ -70,6 +70,31 @@ atelier_core/           # 包根(可被变体 uv add 后绝对导入 atelier_cor
 
 发现按"目录即路由"扫**变体的包**(`core`/`boot`/`services` 是 RESERVED,不当域);无域即空总线。**装配原语在 `boot/`(随内核走);"装配哪些域"在各变体的 `main.py::serve()`(随产品走)——组装点唯一。**
 
+## 包索引
+
+**唯一发布源:Forgejo PyPI**(由 `.forgejo/workflows/publish.yml` 自动构建发布;GitHub 仓不构建、不发包)。
+
+| | 地址 |
+|---|---|
+| 包页面 | http://debian.lan:3257/Carnation/-/packages/pypi/atelier-core |
+| PyPI simple 索引 | http://debian.lan:3257/api/packages/Carnation/pypi/simple/ |
+
+变体侧 `pyproject.toml` 配置索引后即可按版本约束消费(`uv sync` 自动升):
+
+```toml
+[project]
+dependencies = ["atelier-core>=0.2"]
+
+[[tool.uv.index]]
+name = "forgejo"
+url = "http://debian.lan:3257/api/packages/Carnation/pypi/simple/"
+
+[tool.uv.sources]
+atelier-core = { index = "forgejo" }
+```
+
+私有包需认证:`export UV_INDEX_FORGEJO_USERNAME=Carnation UV_INDEX_FORGEJO_PASSWORD=<有 package 读权限的 token>`。
+
 ## 依赖
 
 轻量,无重型推理栈:`pydantic` / `python-dotenv` / `websockets` / `uvicorn`。Python 3.11。
