@@ -1,0 +1,56 @@
+name: 登记 Release(链接到 Forgejo PyPI)
+
+# 包由 .forgejo/workflows/publish.yml 构建并发布到 Forgejo PyPI;GitHub 侧**不构建、不传包**,
+# 只在版本 bump(pyproject.toml 变更 push 到 master/main)时建一条 Release `v<version>`,
+# 正文放 Forgejo PyPI 的包链接与安装方式,作为版本索引。
+# 幂等:该版本 Release 已存在则跳过(必须先 bump version 才会登记新版)。
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - pyproject.toml
+      - .github/workflows/release-link.yml   # 改工作流本身也重触发(幂等跳已登记版本)
+  workflow_dispatch:                         # 手动补登
+
+permissions:
+  contents: write   # 创建 tag + Release;GITHUB_TOKEN 仅作用于本仓
+
+concurrency:
+  group: release-link
+  cancel-in-progress: false
+
+jobs:
+  release-link:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: 登记 Release(版本未登记才建)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORGEJO: http://debian.lan:3257
+        run: |
+          set -euo pipefail
+          VER=$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          TAG="v${VER}"
+          echo "本地版本:$VER"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在,跳过"; exit 0
+          fi
+          cat > notes.md <<NOTES
+          **atelier-core ${VER}** 由 Forgejo 构建并发布到 Forgejo PyPI(本 Release 不含包文件,仅作版本索引)。
+
+          - 包页面:${FORGEJO}/Carnation/-/packages/pypi/atelier-core/${VER}
+          - PyPI simple 索引:${FORGEJO}/api/packages/Carnation/pypi/simple/
+
+          安装(变体侧已按 README「包索引」配置 uv 索引时):
+          \`\`\`bash
+          uv add "atelier-core==${VER}"
+          \`\`\`
+
+          源码 commit:${GITHUB_SHA}
+          NOTES
+          gh release create "$TAG" --target "$GITHUB_SHA" \
+            --title "atelier-core $VER" --notes-file notes.md
+          echo "✅ 已登记 Release $TAG → Forgejo PyPI"
