@@ -1,0 +1,24 @@
+name: 通知 bisync
+
+# 任何分支/tag 推送到 Forgejo 后,触发 GitHub NomadAnget/atelier-sync 的双向同步(即时,不等每小时兜底)。
+# 凭据:Forgejo 用户级 secret GH_SYNC_TOKEN(对 atelier-sync 有 Contents 写权限)。
+on:
+  push:
+    branches: ["**"]
+    tags: ["**"]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    container:
+      image: node:lts
+    steps:
+      - name: 触发 bisync
+        env:
+          TOKEN: ${{ secrets.GH_SYNC_TOKEN }}
+        run: |
+          curl -sSf -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/NomadAnget/atelier-sync/dispatches \
+            -d "{\"event_type\":\"sync\",\"client_payload\":{\"from\":\"forgejo\",\"repo\":\"${GITHUB_REPOSITORY}\",\"ref\":\"${GITHUB_REF}\"}}"
