@@ -6,7 +6,7 @@ name: 登记 Release(链接到 Forgejo PyPI)
 # 幂等:该版本 Release 已存在则跳过(必须先 bump version 才会登记新版)。
 on:
   push:
-    branches: [master, main, claude/relaxed-volta-q3av2z]   # TEMP: 预览用,看完撤回
+    branches: [master, main]
     paths:
       - pyproject.toml
       - .github/workflows/release-link.yml   # 改工作流本身也重触发(幂等跳已登记版本)
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 登记 Release(版本未登记才建)
         env:
