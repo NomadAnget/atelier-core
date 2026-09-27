@@ -8,7 +8,7 @@
 |---|---|
 | `build_hub(remote_handlers, *, domain_root, journal_db, queue_size, ...)` | 发现域 header → 建总线 → mount 各域 handler → 闭环校验 → 返回 `(bus, windows)`;`fill_noop=True` 占位漏接槽(见 [bus.md](bus.md)) |
 | `build_store(store_db, *, domain_root)` | 发现域 schema → 建/对齐表 → 返回 `(store, store_windows)`(每域一个写窗口) |
-| `build_supervisor_and_gateway(cfg, handlers_by_domain, domain_root)` | **通用进程域/网关装配(零域绑定、发现驱动)**:发现 KIND=process 域 → 登记懒子进程进监督器 + 建网关(启用且有转发域时)+ 注入转发 handler + `register_lazy`。返回 `(supervisor, gateway)`。组装点调一次即可,**加 process 域无需改此处/config**(形态 B) |
+| `build_supervisor_and_gateway(cfg, handlers_by_domain, domain_root)` | **通用进程域/网关装配(零域绑定、发现驱动)**:发现 KIND=process 域 → **先定网关端口**(留空则抓空闲口)→ 登记懒子进程进监督器(cmd 带上网关地址,见引导契约)+ 建网关(启用且有转发域时)+ 注入转发 handler + `register_lazy`。返回 `(supervisor, gateway)`。组装点调一次即可,**加 process 域无需改此处/config**(形态 B) |
 | `self_test(domain_root)` | `--check`:发现+挂载+存储自检后退出(不起服务),报"N 域挂载 / M topic 闭环 / K 表" |
 | `_housekeeping_loop(bus, store, retention)` | 内务循环:死信/账本/日志按 `[retention]` 回收 |
 | `_acquire_single_instance_lock(store_db)` | 单实例锁:防两个 hub 抢同一数据目录 |
@@ -41,12 +41,34 @@ name/cmd 必填):
 **动态端口分配(`dynamic_port=true`)——托管边车的通用能力**:凡"端口由我们选、只有本机消费方要连"的哑
 边车(如 bgutil POT 供给器),端口不写死、由监督器构造时抓空闲口(`bind(:0)`)替换 `cmd`/`env` 里的
 `{port}`,重启复用同口,经 `child_port(name)` 暴露。组装点把端口注入消费域(如 ingest 的 `pot_base_url`)。
-**dev/prod 并行各自分到空闲口、永不撞**。边界:仅适用"内部私有口";对外口(web)、连入口(gateway 跨机)
-必须固定端口。
+**dev/prod 并行各自分到空闲口、永不撞**。边界:仅适用"内部私有口";对外口(web)必须固定端口。
+网关口按用途分:**声明了 `remote_domains`(跨机连入)必须固定**——外部实现要知道往哪连;
+**无跨机域时网关是纯本机基础设施**(只有本机 process 域子进程连它),适用动态分配,见下节引导契约。
 
 **process 域的懒起子进程由基础设施推导注册,不写进 config**:`[[supervisor.children]]` 只登记外部哑进程
 (启动命令是部署事实)。process 域启动命令是框架已知的 `python -m atelier_core.boot.remote <域> [域根]`,
 组装点发现即自动注册为 lazy 子进程。**加一个 process 域只写它的 build.py,config 零改动。**
+
+## 引导契约(子进程怎么知道"去哪里连")
+
+**子进程的引导参数由拉起方在 spawn 时显式给出,不从配置文件自取。**
+
+命令行即契约:`python -m atelier_core.boot.remote <域> <域根> <网关地址>`。
+子进程用传入的网关地址连总线,**不读 `cfg.gateway`**。
+
+为什么不能让子进程自己读配置:组装点可用 `--config <别的文件>` 启动(如生产的 user-config.toml
+覆盖 web 端口),而子进程命令行不带它、`config.load()` 无参会回落 `./config.toml` —— 两份文件的
+`[gateway] port` 一旦分歧,子进程就连错端口。**实录 2026-09-27**:生产主进程网关在 8790、
+子进程去连 8793,发布出闸送不到、任务卡 pending。根因是"网关端口"这个值对**创建者**是配置、
+对**消费者**是已发生的运行期事实,却被当成配置复制了一份给消费者。
+
+**引导参数的最小闭包**:子进程仍需 `config.load()` 读 `paths.store_db`(得先知道枢纽在哪才能开它,
+这是不可消除的一环)。故 **`store_db` 是变体固有属性,任何覆盖配置都不得改它**;除它之外,
+子进程不依赖配置文件的任何值。
+
+**网关端口默认动态**:`[gateway] port` 留空/0 = 组装时抓空闲口(与 `dynamic_port` 同一套
+`bind(:0)` 机制),非零 = 固定。无跨机 `remote_domains` 时建议留空——多变体并行(dev/prod/多份
+checkout)再不必人工分配端口、不会撞车。填了值即固定,跨机接入与调试抓包都照旧。
 
 ## process 域的完整语义
 

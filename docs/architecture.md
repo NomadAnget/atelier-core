@@ -90,6 +90,10 @@ tasks = [asyncio.create_task(svc["scheduler"].run_worker()), ...]
 | 存哪 | 文件(`core/config.py` 仅 stdlib 加载) | **存储枢纽,归拥有域**(域的设置表) |
 
 判定口诀:**组装点组装时需要的进 TOML;组装完之后才有人关心的是域数据。**
+
+⚠ 第三类:**组装期确立的运行期事实**(网关实际端口等)。它对创建者像配置、对消费者是既成事实——
+把它当配置复制给消费者,就会出现"两份配置不一致 → 消费者连错"(见 [boot.md](boot.md) 引导契约的
+2026-09-27 实录)。这类值**由确立方在拉起时显式传给消费方**,不靠消费方各自读配置。
 内核 config 节:`paths / web / gateway / supervisor / bus / logger / logstore / sentinel / retention`
 (见 `core/config.py`;`web.dist_dir` = 变体前端构建产物目录)。运行时旋钮走 `core/settings.py`
 底座(见 [storage.md](storage.md) 的设置基座段)。

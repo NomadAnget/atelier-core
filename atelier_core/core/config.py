@@ -80,7 +80,11 @@ class RetentionCfg:
 class GatewayCfg:
     enabled: bool = False
     host: str = "127.0.0.1"          # 只绑本机;跨机部署再显式放开
-    port: int = 8790
+    # **0 = 动态分配**(组装时抓空闲口,见 boot/assembly)。默认动态而非固定:
+    # 网关是纯本机基础设施(只有本机 process 域子进程连它),没有外部方需要知道具体值;
+    # 固定默认值会让多变体/多 checkout 并行时全撞同一个口(实录:studio 与生产同为 8793 起不来)。
+    # 声明了 remote_domains(跨机连入)则**必须显式指定**,否则组装期显式失败。
+    port: int = 0
     token: str = ""                  # 非空则远端 hello 必须携带
     ack_timeout: float = 600.0       # 远端处理一条投递的最长时限(如过风控可达分钟级)
     remote_domains: tuple = ()       # 声明为"异地实现"的域(如 "publishers")

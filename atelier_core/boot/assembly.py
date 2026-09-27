@@ -38,22 +38,37 @@ def build_supervisor_and_gateway(cfg, handlers_by_domain: dict, domain_root: str
     加一个 process 域只写它的 build.py,**此处与 config 零改动**——正是 boot.md 形态 B 的承诺。"""
     import sys
     from .composition import domain_kind
-    from .supervisor import Supervisor
+    from .supervisor import Supervisor, alloc_ports
     from ..core.gateway.server import GatewayServer
     from ..core.registry import load_header
 
     proc = [d for d in discover_headers(domain_root)
             if domain_kind(d, domain_root) == "process"]
+
+    # ── 网关端口:**先定,再拉子进程** ────────────────────────────────────────
+    # 子进程的 cmd 里要带上网关地址(引导契约:子进程不读 cfg.gateway,见 docs/boot.md),
+    # 所以端口必须在建 children 之前就确定 —— 不能等 GatewayServer 建好再说。
+    # `port` 留空/0 = 抓空闲口(与 dynamic_port 边车同一套 alloc_ports):多变体并行不必人工分配。
+    # 非零 = 固定端口;**声明了 remote_domains(跨机连入)时必须固定**,外部实现要知道往哪连。
+    gw_port = int(cfg.gateway.port or 0)
+    if not gw_port:
+        if cfg.gateway.remote_domains:
+            raise ValueError(
+                "[gateway] 声明了 remote_domains(跨机连入)但未指定 port —— "
+                "跨机接入方需要固定端口才能连进来,不能动态分配")
+        gw_port = alloc_ports(1)[0]
+    gw_addr = f"{cfg.gateway.host}:{gw_port}"
+
     children = list(cfg.supervisor.children) + [
         {"name": f"{d}-worker",
-         "cmd": [sys.executable, "-m", "atelier_core.boot.remote", d, domain_root],
+         "cmd": [sys.executable, "-m", "atelier_core.boot.remote", d, domain_root, gw_addr],
          "lazy": True} for d in proc]
     supervisor = Supervisor(children)
 
     gateway = None
     forward = list(dict.fromkeys(list(cfg.gateway.remote_domains) + proc))
     if cfg.gateway.enabled and forward:
-        gateway = GatewayServer(host=cfg.gateway.host, port=cfg.gateway.port,
+        gateway = GatewayServer(host=cfg.gateway.host, port=gw_port,
                                 token=cfg.gateway.token, ack_timeout=cfg.gateway.ack_timeout)
         handlers_by_domain.update(
             {d: gateway.remote_handlers(load_header(d, domain_root)) for d in forward})

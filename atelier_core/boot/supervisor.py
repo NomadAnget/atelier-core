@@ -21,6 +21,27 @@ from typing import Any
 from ..core import logger
 
 
+def alloc_ports(n: int, host: str = "127.0.0.1") -> list[int]:
+    """抓 n 个空闲端口(`bind(:0)` 让内核选)。**同批持锁到全分配完再释放**——
+    逐个 bind/close 会让内核把刚释放的口重新发给下一个,同批拿到重复端口(实测会撞)。
+
+    供监督器的 `dynamic_port` 边车与**网关本身**共用(见 docs/boot.md 引导契约):
+    "端口由我们选、只有本机消费方要连"的口一律走这里,免去人工跨变体分配。
+    """
+    import socket
+    held, ports = [], []
+    try:
+        for _ in range(max(0, n)):
+            sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sk.bind((host, 0))
+            ports.append(int(sk.getsockname()[1]))
+            held.append(sk)
+    finally:
+        for sk in held:
+            sk.close()
+    return ports
+
+
 class SupervisorError(Exception):
     """子进程声明不合法。"""
 
@@ -90,20 +111,8 @@ class Supervisor:
         self._expected_exit: set[str] = set()
         self._exit_listeners: dict[str, Any] = {}
         # 动态端口:构造时一次性分配(消费方组装期即可 child_port 查),重启复用同口。
-        # 同批多个 dynamic_port 边车:持锁到全分配完再释放,避免抢到同一口。
-        self._ports: dict[str, int] = {}
-        _held = []
-        try:
-            import socket
-            for spec in self._specs:
-                if spec["dynamic_port"]:
-                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s.bind(("127.0.0.1", 0))
-                    self._ports[spec["name"]] = int(s.getsockname()[1])
-                    _held.append(s)
-        finally:
-            for s in _held:
-                s.close()
+        names = [sp["name"] for sp in self._specs if sp["dynamic_port"]]
+        self._ports: dict[str, int] = dict(zip(names, alloc_ports(len(names))))
 
     def child_port(self, name: str) -> int | None:
         """动态分配给该子进程的端口(未声明 dynamic_port 则 None)。消费域拼地址用。"""

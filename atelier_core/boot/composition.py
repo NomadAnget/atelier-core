@@ -101,12 +101,19 @@ def _adapt(handler: Handler, schema: Any) -> Callable[[dict, dict], Awaitable[No
     return h
 
 
-async def run_domain_subprocess(domain: str, root: str | None = None) -> None:
+async def run_domain_subprocess(domain: str, root: str | None = None,
+                                gateway_addr: str | None = None) -> None:
     """process 域子进程宿主(`python -m src.boot.remote <域>`)——通用,不为任何域特化。
 
     组装 = 开存储枢纽(挂全 schema,DDL 幂等)→ BusClient 接网关 → 调域 build()
     (与主进程同一份)→ 绑 handler → 起循环/落种 → 常驻直至信号。日志走结构化
     中继(BusClient 自动),detach 控制台防与监督器文本泵重复。
+
+    ``gateway_addr``("host:port")由拉起方显式给出 —— **引导契约**(见 docs/boot.md):
+    组装点可用 `--config 别的文件` 启动,而本进程命令行不带它,`config.load()` 会回落 ./config.toml;
+    两份文件的 [gateway]port 一分歧,这里就连错端口(2026-09-27 生产实录:主进程 8790、
+    子进程连 8793,发布卡 pending)。故网关地址不从 cfg 取。
+    配置文件在此仅用于 `paths.store_db`(得先知道枢纽在哪才能开)——那是变体固有属性,不该被覆盖改动。
     """
     root = root or _DEFAULT_ROOT
     from ..core.gateway.client import BusClient
@@ -128,8 +135,8 @@ async def run_domain_subprocess(domain: str, root: str | None = None) -> None:
     await hub.start()
 
     loop = asyncio.get_running_loop()
-    client = BusClient(f"ws://{cfg.gateway.host}:{cfg.gateway.port}",
-                       domain=domain, token=cfg.gateway.token)
+    addr = gateway_addr or f"{cfg.gateway.host}:{cfg.gateway.port}"   # 缺省仅兼容手工调试
+    client = BusClient(f"ws://{addr}", domain=domain, token=cfg.gateway.token)
     ctx = BuildContext(hub=hub, stores=stores, publish=client, loop=loop, cfg=cfg)
     rt = build_mod.build(ctx)
 
@@ -160,8 +167,9 @@ async def run_domain_subprocess(domain: str, root: str | None = None) -> None:
                     pass
                 await asyncio.sleep(_BUSY_TICK_SEC)
         tasks.append(asyncio.create_task(_busy_ticker(), name=f"{domain}_busy_ticker"))
-    logger.info("%s 执行进程就绪 pid=%d(网关 ws://%s:%d)", domain, os.getpid(),
-                cfg.gateway.host, cfg.gateway.port, layer=domain.upper(),
+    # 打**实际连的那个地址**,不是 cfg 里的值 —— cfg.gateway.port 在动态模式下是 0,
+    # 照打会让日志说谎(实录:连的是 44462,日志写 ws://127.0.0.1:0),排查时误导人。
+    logger.info("%s 执行进程就绪 pid=%d(网关 ws://%s)", domain, os.getpid(), addr, layer=domain.upper(),
                 component=f"{domain}Worker")
 
     stop = asyncio.Event()
