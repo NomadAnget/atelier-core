@@ -72,7 +72,8 @@ atelier_core/           # 包根(可被变体 uv add 后绝对导入 atelier_cor
 
 ## 包索引
 
-**唯一发布源:Forgejo PyPI**(由 `.forgejo/workflows/publish.yml` 自动构建发布;GitHub 仓不构建、不发包)。
+**唯一发布源:Forgejo PyPI**(由 `.forgejo/workflows/publish.yml` 自动构建发布)。GitHub 仓不构建、不发包,
+每个版本在 Releases 里登记一条 `v<version>`,正文链到 Forgejo 上对应版本(`.github/workflows/release-link.yml`)。
 
 | | 地址 |
 |---|---|
