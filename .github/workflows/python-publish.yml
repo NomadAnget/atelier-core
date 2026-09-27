@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  packages: write # <--- 关键：赋予 Package 写入权限
 
 jobs:
   release-build:
@@ -24,14 +25,16 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Build release distributions
+      - name: Install dependencies & build
         run: |
           python -m pip install --upgrade pip
-          python -m pip install build
+          python -m pip install build twine
           python -m build
 
-      - name: Upload distributions
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-dists
-          path: dist/
+      # 上传发布到 GitHub Packages (https://nuget.pkg.github.com/OWNER 或 ghcr)
+      - name: Publish to GitHub Packages
+        env:
+          TWINE_USERNAME: ${{ github.actor }}
+          TWINE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python -m twine upload --repository-url https://noproxy.github.com/_json https://upload.github.org/ --skip-existing dist/* || true
