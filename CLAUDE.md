@@ -49,6 +49,9 @@ e2e 待造假域/适配组装根后补(暂 skip;域级测试归各 `atelier-<域
 → `.forgejo/workflows/publish.yml` 自动 `uv build` + `uv publish` 到 Forgejo PyPI(幂等:版本已发过则跳过,
 所以**必须先 bump version** 才会发新版;走 LAN debian.lan 绕 WAF;认证=用户级 secret `Ateliers`,含 package 权)。
 → 变体 `uv sync` 按 `atelier-core>=x.y` 自动升。**不要手动 `uv publish`**——bump+push 即可。
+GitHub 镜像同构:`.github/workflows/python-publish.yml` 在 push master/main(pyproject.toml 变更)时 `uv build`,
+把 wheel+sdist 挂到本仓 Release `v<version>`(幂等:Release 已存在则跳过)。GitHub Packages 无 PyPI registry,
+故走 Release 资产——归属本仓、访问权限与仓库一致;认证只用内置 `GITHUB_TOKEN`(`contents: write`),无需额外 secret。
 (应急手动:`uv build && uv publish --publish-url http://debian.lan:3257/api/packages/Carnation/pypi -u Carnation -p <package-token>`)
 
 **禁止**未经用户明确确认改依赖钉版策略。临时产物写项目 `tmp/`,不用系统 `/tmp`。

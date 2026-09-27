@@ -1,40 +1,49 @@
-name: Upload Python Package
+name: 发布 atelier-core 到 GitHub Release
 
+# 与 .forgejo/workflows/publish.yml 同构:pyproject.toml 变更 push 到 master/main 即自动构建 + 发布。
+# 产物(wheel + sdist)挂在本仓 Release `v<version>` 上 —— GitHub Packages 没有 PyPI registry,
+# Release 资产天然归属本仓、访问权限与仓库一致(私有仓即私有,需有仓库读权限才能下载)。
+# 幂等:该版本的 Release 已存在则跳过(必须先 bump version 才会发新版)。
 on:
   push:
-    branches:
-      - master
-      - main
+    branches: [master, main]
     paths:
-      - 'pyproject.toml'
-      - '.github/workflows/python-publish.yml'
-  release:
-    types: [published]
+      - pyproject.toml
+      - .github/workflows/python-publish.yml   # 改工作流本身也重触发(幂等跳已发版本)
+  workflow_dispatch:                           # 手动补发
 
 permissions:
-  contents: read
-  packages: write # <--- 关键：赋予 Package 写入权限
+  contents: write   # 创建 tag + Release、上传资产;GITHUB_TOKEN 仅作用于本仓
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
-  release-build:
+  publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v6
 
-      - name: Install dependencies & build
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install build twine
-          python -m build
-
-      # 上传发布到 GitHub Packages (https://nuget.pkg.github.com/OWNER 或 ghcr)
-      - name: Publish to GitHub Packages
+      - name: 构建并发布(版本未发过才发)
         env:
-          TWINE_USERNAME: ${{ github.actor }}
-          TWINE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python -m twine upload --repository-url https://noproxy.github.com/_json https://upload.github.org/ --skip-existing dist/* || true
+          set -euo pipefail
+          VER=$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          TAG="v${VER}"
+          echo "本地版本:$VER"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在,跳过发布"; exit 0
+          fi
+          uv build
+          ls -l dist/
+          gh release create "$TAG" dist/atelier_core-* \
+            --target "$GITHUB_SHA" \
+            --title "atelier-core $VER" \
+            --notes "自动发布:atelier-core $VER(commit ${GITHUB_SHA})"
+          echo "✅ 已发布 atelier-core $VER → Release $TAG"
