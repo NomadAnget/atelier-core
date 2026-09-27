@@ -69,7 +69,7 @@ src/<domain>/
    `atelier_core.boot.composition`(仅装配契约类型 `BuildContext` / `DomainRuntime`;组装机制不碰);
 2. **本域自己的文件**(相对);
 3. **他域的 header / schema**(契约级依赖:拿消息与数据形状,相对 `from ..域 import header`);
-4. **`engines` 纯函数库**。**重推理引擎除外**——见下"重推理闸";
+4. **`engines` 纯函数库**。**GPU 重引擎除外**(只准 `pipelines/` 内)——见下「引擎分级与不常驻」;
 5. **`platform_adapters` 协议件** + `daemons.sources` 等域根门面(纯函数/网络 IO,不发消息);
 6. **task SDK** `from ..task.sdk import …`(PipelineStep/StepContext/CheckpointStore/… 供管线插件);
 7. **`atelier_core.core.logger`**(黑匣子)。
@@ -77,16 +77,46 @@ src/<domain>/
 **禁止**:import 他域的 service/impl 文件;任何绕过窗口的旁路。唯一跨域 import 特例:
 `scheduler.registry`(任务类型注册表=管线插座,管线域只碰注册函数)。
 
-## 重推理闸(铁律 #5)
+## 引擎分级与不常驻(铁律 #5)
 
-引擎文件凡 import 推理框架(torch/paddle/onnxruntime/nemo 等,`engines/base.py` 基类豁免)= 重引擎
-——载权重上 GPU,**只准 `pipelines/` 内 import**(引擎包内互调不受限)。域 handler/服务层拉起重引擎
-会和运行中的任务抢显卡。双档执法:
+引擎域是**全系统的计算中心**,不专属管线。约束按**设备**分两级(旧判据"import 了推理框架即重"
+已废:同一个 torch 模型跑 CPU 并不抢显卡,却被一刀切锁进管线)。
 
-- **静态**:声明式自动识别,越界 import 即红灯(`test_import_discipline`);
-- **运行时**:重引擎类标 `HEAVY_INFERENCE=True`,`BaseModel.__enter__` 在管线上下文
+| 级 | 判据 | 谁能调 | 硬约束 |
+|---|---|---|---|
+| **重引擎** | 在本进程把权重载上 **GPU**(`HEAVY_INFERENCE=True`) | **只准 `pipelines/` 上下文** | 单次推理默认走独立子进程(故障隔离 + 显存完美回收,`SUBPROCESS_INFER`);宜声明 `VRAM_GB`(`map_concurrent` 据此判并发) |
+| **轻引擎** | 纯 CPU 推理(`CPU_ONLY=True`),或只调外部服务(ollama 等,显存归外部服务管,无需标记) | **任何域** | 永不跑在事件循环(worker 线程池 / 独立进程);`CPU_ONLY` 须声明 `RAM_GB` |
+
+**载模型的代码一律是引擎类**:模块级函数直接载模型(`load_xxx()` 后当场推理)无从分级、无从管生命周期,
+不允许;须封装为 `BaseModel` 子类并二选一声明 `HEAVY_INFERENCE=True`(GPU)或 `CPU_ONLY=True`(CPU),
+两者互斥。只 import 推理框架做数据处理、不载模型的**辅助模块**(如某引擎包的 `_common.py`)须在静态测试的
+辅助模块白名单里逐条登记理由。
+
+`CPU_ONLY` 引擎(用推理框架跑 CPU)额外:
+
+- 强制独立子进程推理(内存完美回收),子进程**屏蔽 GPU**(`CUDA_VISIBLE_DEVICES=""`)——
+  物理上碰不到显卡,不靠自觉;
+- 同一模型既要 GPU 批量又要 CPU 零散用时,**拆两个引擎类**(同权重、同输出空间),各按其级约束。
+
+**不常驻(两级通用)**:模型只活在一次调用 / 一个 `with` 作用域内,用完即释放。禁止把模型对象存进
+模块级 / 类级变量或域服务实例上复用(`_cache[lang] = spacy.load(...)` 这类即违规,不论是否引擎类);
+调外部服务的引擎退出时须让服务卸载(ollama `keep_alive=0` 并确认显存归还)。理由:本机与生产
+**同机**,常驻的每一份模型都在和生产任务的峰值抢内存 / 显存,且无人负责回收。
+(权重文件被 OS 页缓存不算常驻——那是内核可随时回收的缓存。)
+
+执法:
+
+- **运行时**(生效中):`BaseModel.__enter__` 对 `HEAVY_INFERENCE=True` 在管线上下文
   (`heavy_inference_scope`,管线 runner 打开,线程局部)之外**当场拒绝载权重**;逃生门
-  `GCP_ALLOW_HEAVY_OUTSIDE_PIPELINE=1`。
+  `GCP_ALLOW_HEAVY_OUTSIDE_PIPELINE=1`。CPU 框架引擎的子进程由基类统一设 `CUDA_VISIBLE_DEVICES=""`。
+- **静态**:引擎域 `tests/test_engine_discipline.py`(AST,不执行引擎代码),引擎域自己看守对外契约:
+  ① import 推理框架的模块须含已声明级别的引擎类(或在辅助模块白名单);② `HEAVY_INFERENCE`/`CPU_ONLY`
+  互斥,`CPU_ONLY` 须 `RAM_GB>0`;③ **不常驻**:引擎模块的函数/方法不得改写模块级状态(`global`、
+  `_x[k]=`、`_x.update()` 等)或类级状态(`cls._x=`),非模型状态(配置快照/静态表/可用性标志)须在
+  白名单逐条登记理由,白名单项失效即红灯;④ **跨域**:GPU 引擎模块只准 `engines/`、`pipelines/` 内 import——
+  需看见整棵 `src/`,在变体检出里跑时扫同级全部域,引擎仓单独检出时显式 skip(不假装通过)。
+  跑法:变体根 `.venv/bin/python -m unittest discover -s src/engines/tests`。
+  (旧 `test_import_discipline` 的跨域 import 白名单部分——铁律 4——拆多仓后仍**无仓在跑**,待另行重建。)
 
 **CPU 重活的唯一合法去处**:engines 纯函数库,由 worker 经线程池/独立进程调用,永不直接跑在事件循环。
 引擎并发/单次推理子进程隔离(`map_concurrent` 纯进程级 + `SUBPROCESS_INFER`)见引擎域(`atelier-engines`)
