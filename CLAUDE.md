@@ -12,28 +12,28 @@
 
 `docs/` 是 **Atelier 体系的宪法**(架构/契约/纪律的唯一真源),不是本仓一家的说明:
 
-- [docs/CONSTITUTION.md](docs/CONSTITUTION.md) — 纲领:铁律 + 认知隔离 + 三层结构 + 宪法同步律
+- [docs/CONSTITUTION.md](docs/CONSTITUTION.md) — 纲领:宪法两级(机器宪法 M1–M13 + 行为规范 B1–B7)+ 认知隔离 + 三层结构
 - [docs/architecture.md](docs/architecture.md) — 三层、目录即路由、domain_root、组装点、新增域清单
 - [docs/bus.md](docs/bus.md) — 总线:契约/闭环校验/投递语义/handler 契约/网关/执行交接
 - [docs/storage.md](docs/storage.md) — 存储枢纽:两种表、写权、无感自增量、设置基座
-- [docs/domains.md](docs/domains.md) — 域构建:三形态、文件结构、import 白名单、重推理闸
+- [docs/domains.md](docs/domains.md) — 域构建:三形态、文件结构、import 白名单(PUBLIC 声明制)、引擎分级与不常驻
 - [docs/boot.md](docs/boot.md) — 组装层:build_hub/store、监督器、process 域(保留·未用)
 - [docs/logging.md](docs/logging.md) — 日志三用法
 
-## 铁律(全文见 docs/CONSTITUTION.md)
+## 宪法两级(全文见 docs/CONSTITUTION.md)
 
-1. **单一逻辑**:加实现前先搜现有的。
-2. **认知隔离**:代码只放对的域;跨域走消息不直调;import 纪律机器封禁(**先改测试白名单再改代码**)。
-3. **重型推理只在管线内**(静态 AST + 运行时闸双重强制)。
-4. **显式失败,不静默兜底**。
-5. **Linux only**。
-6. **宪法同步律**:契约/规则/纪律变更,**先改 `docs/` 对应篇再写代码**。
+- **第一级 · 机器宪法 M1–M13**:能机器判的规则,**执法代码全在本仓**——组装期 `core/registry.py` /
+  `core/storage.py`、静态 `atelier_core/discipline.py`(变体/域/管线仓通用:`python -m atelier_core.discipline <路径>`,
+  自动识别模式)。改规则 = 先改 docs,再改这里的执法代码 + `tests/test_discipline.py`。
+- **第二级 · 行为规范 B1–B7**:全集 = M1–M13 + 机器判不了的(单一逻辑 / 认知隔离 / 显式失败 / Linux only /
+  宪法同步律 / handler 纪律 / 组装归基础设施),写代码的人与 Claude 自律。
 
 ## 命令
 
 ```bash
 uv run python -m atelier_core.main --check              # 本仓自检(空总线,0 域)
 uv run python -m unittest discover -s tests -p 'test_*.py'  # 内核测试套件
+uv run python -m atelier_core.discipline <变体src|域仓|管线仓>  # 机器宪法静态扫描
 uv build                                                # 构建 wheel/sdist
 ```
 

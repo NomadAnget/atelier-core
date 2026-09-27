@@ -46,12 +46,20 @@ src/<domain>/
 └── impl/          域私有实现(域外永不 import)
 ```
 
-**例外:白名单公开件也留域根**(本就允许被跨域直调):如 `scheduler/registry.py`(管线插座)、
-`platform_adapters/` 的协议件(`youtube/`、`youtube_token.py`、`oauth_state.py`、`ingest.py`)、
-`daemons/sources.py`(采集源门面)。`engines/`(纯函数库)整体公开,根即接口,不套 impl。
+**例外:公开件也留域根,并在本域 header 的 `PUBLIC` 里声明**(本就允许被跨域直调):如 scheduler
+`PUBLIC=("registry",)`(管线插座)、task `("sdk",)`、daemons `("sources",)`(采集源门面)、
+platform_adapters 的协议件、media 的只读门面 `MediaStore`。`engines/`(纯函数库)整体公开,
+声明 `PUBLIC=("*",)`,根即接口,不套 impl。
 
-判定口诀:**这文件允许被别的域 import 吗?能→留域根;不能→进 impl/。** 机器可核
-(`test_import_discipline`:跨域 import 只放行 `他域.header`/`他域.schema` 与白名单,`他域.impl.*` 一律拒)。
+`VENDORED`(可选,域内相对路径元组):随域携带的第三方代码(如引擎域的 `media/indextts` 子模块),
+不受纪律扫描——那不是我们写的代码,也不照我们的规矩写。
+
+`PUBLIC` 的每一项是域根下的**模块名或名字**:`"registry"` 放行 `他域.registry` 及其下一切;`"MediaStore"`
+放行 `from ..media import MediaStore`。**只有声明过的才放行**——域根 `__init__.py` 把 impl 里的东西转出来
+而不声明,照样判越界(堵"经域根转手 impl"的漏洞)。
+
+判定口诀:**这文件允许被别的域 import 吗?能→留域根并写进 PUBLIC;不能→进 impl/。** 机器可核
+(`atelier_core.discipline`:跨域 import 只放行 `他域.header`/`他域.schema` 与他域 `PUBLIC`,其余一律拒)。
 
 ## 域内代码的三种身份
 
@@ -69,15 +77,13 @@ src/<domain>/
    `atelier_core.boot.composition`(仅装配契约类型 `BuildContext` / `DomainRuntime`;组装机制不碰);
 2. **本域自己的文件**(相对);
 3. **他域的 header / schema**(契约级依赖:拿消息与数据形状,相对 `from ..域 import header`);
-4. **`engines` 纯函数库**。**GPU 重引擎除外**(只准 `pipelines/` 内)——见下「引擎分级与不常驻」;
-5. **`platform_adapters` 协议件** + `daemons.sources` 等域根门面(纯函数/网络 IO,不发消息);
-6. **task SDK** `from ..task.sdk import …`(PipelineStep/StepContext/CheckpointStore/… 供管线插件);
-7. **`atelier_core.core.logger`**(黑匣子)。
+4. **他域 header 声明的 `PUBLIC` 公开件**(engines 纯函数库整体公开、task SDK、scheduler.registry 管线插座、
+   协议件与门面等,以各域声明为准)。**GPU 重引擎除外**(只准本域与 `pipelines/` 内)——见下「引擎分级与不常驻」;
+5. **`atelier_core.core.logger`**(黑匣子)。
 
-**禁止**:import 他域的 service/impl 文件;任何绕过窗口的旁路。唯一跨域 import 特例:
-`scheduler.registry`(任务类型注册表=管线插座,管线域只碰注册函数)。
+**禁止**:import 他域未声明公开的文件(含 service/impl);任何绕过窗口的旁路。
 
-## 引擎分级与不常驻(铁律 #5)
+## 引擎分级与不常驻(M7 / M8 / M9)
 
 引擎域是**全系统的计算中心**,不专属管线。约束按**设备**分两级(旧判据"import 了推理框架即重"
 已废:同一个 torch 模型跑 CPU 并不抢显卡,却被一刀切锁进管线)。
@@ -89,8 +95,9 @@ src/<domain>/
 
 **载模型的代码一律是引擎类**:模块级函数直接载模型(`load_xxx()` 后当场推理)无从分级、无从管生命周期,
 不允许;须封装为 `BaseModel` 子类并二选一声明 `HEAVY_INFERENCE=True`(GPU)或 `CPU_ONLY=True`(CPU),
-两者互斥。只 import 推理框架做数据处理、不载模型的**辅助模块**(如某引擎包的 `_common.py`)须在静态测试的
-辅助模块白名单里逐条登记理由。
+两者互斥。只 import 推理框架做数据处理、不载模型的**辅助模块**(如某引擎包的 `_common.py`)须在所属域
+header 的 `FRAMEWORK_HELPERS`(`{模块: 理由}`)里逐条登记。本条对**所有域**一视同仁(内核不认识哪个是引擎域):
+哪个域有载模型的代码,就在哪个域按本节约束。
 
 `CPU_ONLY` 引擎(用推理框架跑 CPU)额外:
 
@@ -109,14 +116,12 @@ src/<domain>/
 - **运行时**(生效中):`BaseModel.__enter__` 对 `HEAVY_INFERENCE=True` 在管线上下文
   (`heavy_inference_scope`,管线 runner 打开,线程局部)之外**当场拒绝载权重**;逃生门
   `GCP_ALLOW_HEAVY_OUTSIDE_PIPELINE=1`。CPU 框架引擎的子进程由基类统一设 `CUDA_VISIBLE_DEVICES=""`。
-- **静态**:引擎域 `tests/test_engine_discipline.py`(AST,不执行引擎代码),引擎域自己看守对外契约:
-  ① import 推理框架的模块须含已声明级别的引擎类(或在辅助模块白名单);② `HEAVY_INFERENCE`/`CPU_ONLY`
-  互斥,`CPU_ONLY` 须 `RAM_GB>0`;③ **不常驻**:引擎模块的函数/方法不得改写模块级状态(`global`、
-  `_x[k]=`、`_x.update()` 等)或类级状态(`cls._x=`),非模型状态(配置快照/静态表/可用性标志)须在
-  白名单逐条登记理由,白名单项失效即红灯;④ **跨域**:GPU 引擎模块只准 `engines/`、`pipelines/` 内 import——
-  需看见整棵 `src/`,在变体检出里跑时扫同级全部域,引擎仓单独检出时显式 skip(不假装通过)。
-  跑法:变体根 `.venv/bin/python -m unittest discover -s src/engines/tests`。
-  (旧 `test_import_discipline` 的跨域 import 白名单部分——铁律 4——拆多仓后仍**无仓在跑**,待另行重建。)
+- **静态**:`atelier_core.discipline`(AST,不执行任何域代码;header 声明按字面量读),对全部域一视同仁:
+  ① import 推理框架的模块须含已声明级别的引擎类(或登记在本域 `FRAMEWORK_HELPERS`);② `HEAVY_INFERENCE`/`CPU_ONLY`
+  互斥,`CPU_ONLY` 须 `RAM_GB>0`;③ **不常驻**:载模型的域(有引擎类或辅助模块的域)其模块的函数/方法不得改写
+  模块级状态(`global`、`_x[k]=`、`_x.update()` 等)或类级状态(`cls._x=`),非模型状态(配置快照/静态表)登记在
+  本域 header 的 `STATE_ALLOWED`(`{(模块, 名字): 理由}`),登记项失效即报错;④ **跨域**:定义 GPU 引擎的模块只准
+  本域与 `pipelines/` 内 import。跑法:变体根 `.venv/bin/python -m atelier_core.discipline src`。
 
 **CPU 重活的唯一合法去处**:engines 纯函数库,由 worker 经线程池/独立进程调用,永不直接跑在事件循环。
 引擎并发/单次推理子进程隔离(`map_concurrent` 纯进程级 + `SUBPROCESS_INFER`)见引擎域(`atelier-engines`)
