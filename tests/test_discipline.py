@@ -9,9 +9,10 @@ from __future__ import annotations
 import tempfile
 import textwrap
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
-from atelier_core.discipline import check
+from atelier_core.discipline import check, main
 
 
 def _tree(files: dict[str, str]) -> Path:
@@ -207,6 +208,15 @@ class ModeDetectionTests(unittest.TestCase):
         self.assertEqual(rules, ["M10|eng/__main__.py:1", "M6|eng/impl/x.py"])
         self.assertTrue(any(s.startswith("M6 1 处") for s in rep.skipped))
         self.assertTrue(any(s.startswith("M8 本域 1 个") for s in rep.skipped))
+
+    def test_cli_accepts_external_domain_checkout_path(self):
+        repo = Path(tempfile.mkdtemp()) / "independent-checkout"
+        repo.mkdir()
+        (repo / "header.py").write_text(_hdr("eng"), encoding="utf-8")
+        (repo / "service.py").write_text("print('bad')\n", encoding="utf-8")
+
+        with patch("atelier_core.core.logger.error"), patch("atelier_core.core.logger.info"):
+            self.assertEqual(main([str(repo)]), 1)
 
     def test_domain_mode_header_importing_other_domain_is_skipped(self):
         repo = Path(tempfile.mkdtemp()) / "atelier-b"

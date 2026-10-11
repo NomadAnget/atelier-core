@@ -25,6 +25,22 @@ Atelier 只做一件事的地基:**模块间通信的中转站 + 存储枢纽 + 
 如 `src`)。单域模式看不到其他域,需要全局视野的条目明确报"跳过(由变体检查覆盖)",不算通过也不算失败。
 有违规退出码 1。
 
+**下游域仓 PR CI**可直接把独立 checkout 中的域根路径作为参数,无需把域源码放进可导入的 `src` 包,
+也无需修改仓库名或工作目录:
+
+```bash
+python -m atelier_core.discipline "$DOMAIN_CHECKOUT"
+python -m compileall -q "$DOMAIN_CHECKOUT"
+```
+
+`DOMAIN_CHECKOUT` 指向独立 PR checkout 中**直接包含 `header.py` 的目录**(若当前工作目录就是域仓根,可设为 `.`)。
+CI 环境需已安装 atelier-core 及其依赖,并使用 Python 3.11;两条命令都由该环境中的 Python 执行。
+第一条扫描该域 checkout 的 Python 源码(排除 `tests/`、`node_modules/` 和 `VENDORED` 登记目录);
+第二条单独递归检查 checkout 中 Python 文件的语法。
+单域模式可判域内规则与明确指向 `impl` 的越界 import,但依赖其他域的头文件/存储声明导入、
+跨域 `PUBLIC` 判定及 GPU 引擎的全局调用方检查可能报告"跳过"。因此此命令不替代变体级扫描、
+组装自检。
+
 ### 第一级 · 机器宪法
 
 | 编号 | 规则 | 静态(discipline) | 组装期 / 运行时 | 细则 |
