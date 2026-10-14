@@ -1,0 +1,26 @@
+name: Notify commit check
+on:
+  push:
+    branches: ["**"]
+permissions: {}
+jobs:
+  notify:
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Request commit assembly check
+        env:
+          GH_TOKEN: ${{ secrets.GH_SYNC_TOKEN }}
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "GH_SYNC_TOKEN is missing; commit check was not requested."
+            exit 1
+          fi
+          gh api --method POST repos/NomadAnget/atelier-sync/dispatches \
+            -f event_type=atelier_check \
+            -f "client_payload[repository]=$SOURCE_REPO" \
+            -f "client_payload[sha]=$SOURCE_SHA"
